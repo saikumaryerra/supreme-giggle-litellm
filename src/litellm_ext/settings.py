@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     jwt_audience: str = ""
     jwks_url: str = ""
     jwks_cache_ttl: int = 3600
+    jwks_min_refetch_interval: int = 10  # min seconds between unknown-kid refetches
     jwt_algorithms: StrList = Field(default_factory=lambda: ["RS256"])
     jwt_clock_skew: int = 60
     role_claim: str = "roles"
@@ -93,6 +94,9 @@ class Settings(BaseSettings):
     scim_enabled: bool = False
     scim_token: str = ""
     scim_team_prefix: str = ""  # only map IdP groups with this prefix (e.g. "llm-")
+    # When Redis is configured but a revocation-set check errors, deny the
+    # request (fail closed) rather than let a deactivated/blocked user through.
+    revocation_fail_closed: bool = True
     litellm_api_base: str = "http://localhost:4000"
     litellm_master_key: str = Field(default="", alias="LITELLM_MASTER_KEY")
 

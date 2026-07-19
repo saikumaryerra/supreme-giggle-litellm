@@ -49,7 +49,12 @@ def reset_client() -> None:
     _client = None
 
 
+class RedisUnavailable(Exception):
+    """A configured Redis was reached-for but errored — caller decides policy."""
+
+
 async def set_contains(set_name: str, member: str) -> bool:
+    """Fail-open membership check (budget/downgrade): errors → treat as absent."""
     client = get_redis()
     if client is None or not member:
         return False
@@ -58,6 +63,22 @@ async def set_contains(set_name: str, member: str) -> bool:
     except Exception:  # noqa: BLE001 - Redis outage must not break auth
         logger.warning("redis check failed for %s; treating as absent", set_name)
         return False
+
+
+async def set_contains_strict(set_name: str, member: str) -> bool:
+    """Fail-closed membership check (revocation): errors raise RedisUnavailable.
+
+    Returns False when Redis is not configured at all (nothing to enforce) so
+    deployments without Redis are unaffected; raises only when a configured
+    Redis is unreachable, letting auth deny rather than admit a revoked user.
+    """
+    client = get_redis()
+    if client is None or not member:
+        return False
+    try:
+        return bool(await client.sismember(set_name, member))
+    except Exception as exc:  # noqa: BLE001
+        raise RedisUnavailable(set_name) from exc
 
 
 async def get_downgrade_models(team_id: str) -> list[str] | None:

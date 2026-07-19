@@ -189,6 +189,37 @@ class TestIpAllowlist:
         result = await auth(make_token(), client_ip="10.9.9.9")
         assert result.user_id == "user-1"
 
+    async def test_revocation_fails_closed_on_redis_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A configured-but-unreachable Redis must deny, not admit, so a
+        # deactivated user can't slip through during a Redis outage.
+        from litellm_ext import redis_client
+        from litellm_ext.auth import jwt_auth as ja
+
+        async def boom(set_name: str, member: str) -> bool:
+            raise redis_client.RedisUnavailable(set_name)
+
+        monkeypatch.setattr(ja, "set_contains_strict", boom)
+        with pytest.raises(HTTPException) as exc:
+            await auth(make_token())
+        assert exc.value.status_code == 403
+
+    async def test_revocation_fail_open_when_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("LITELLM_EXT_REVOCATION_FAIL_CLOSED", "false")
+        reset_settings_cache()
+        from litellm_ext import redis_client
+        from litellm_ext.auth import jwt_auth as ja
+
+        async def boom(set_name: str, member: str) -> bool:
+            raise redis_client.RedisUnavailable(set_name)
+
+        monkeypatch.setattr(ja, "set_contains_strict", boom)
+        result = await auth(make_token())
+        assert result.user_id == "user-1"  # fail-open honored when opted in
+
     async def test_xff_from_untrusted_peer_ignored(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

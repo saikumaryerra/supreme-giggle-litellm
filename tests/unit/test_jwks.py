@@ -50,7 +50,7 @@ class TestJwksCache:
     async def test_fetch_and_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
         endpoint = FakeJwksEndpoint({"keys": [jwk_for("a", KEY_A)]})
         endpoint.install(monkeypatch)
-        cache = JwksCache(jwks_url="https://idp.test/jwks", ttl=3600)
+        cache = JwksCache(jwks_url="https://idp.test/jwks", ttl=3600, min_refetch=0)
 
         await cache.get_key("a")
         await cache.get_key("a")
@@ -61,7 +61,7 @@ class TestJwksCache:
     ) -> None:
         endpoint = FakeJwksEndpoint({"keys": [jwk_for("a", KEY_A)]})
         endpoint.install(monkeypatch)
-        cache = JwksCache(jwks_url="https://idp.test/jwks", ttl=3600)
+        cache = JwksCache(jwks_url="https://idp.test/jwks", ttl=3600, min_refetch=0)
         await cache.get_key("a")
 
         # IdP rotates: kid "b" appears.
@@ -74,7 +74,7 @@ class TestJwksCache:
     ) -> None:
         endpoint = FakeJwksEndpoint({"keys": [jwk_for("a", KEY_A)]})
         endpoint.install(monkeypatch)
-        cache = JwksCache(jwks_url="https://idp.test/jwks", ttl=3600)
+        cache = JwksCache(jwks_url="https://idp.test/jwks", ttl=3600, min_refetch=0)
         with pytest.raises(JwksError):
             await cache.get_key("never-existed")
 
@@ -83,10 +83,24 @@ class TestJwksCache:
     ) -> None:
         endpoint = FakeJwksEndpoint({"keys": [jwk_for("a", KEY_A)]})
         endpoint.install(monkeypatch)
-        cache = JwksCache(jwks_url="https://idp.test/jwks", ttl=0)  # instant expiry
+        cache = JwksCache(jwks_url="https://idp.test/jwks", ttl=0, min_refetch=0)
         await cache.get_key("a")
 
         endpoint.down = True
         assert await cache.get_key("a") is not None  # stale-but-cached survives
         with pytest.raises(JwksError):
             await cache.get_key("new-kid")  # new kid fails closed
+
+    async def test_unknown_kid_refetch_is_throttled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pre-auth DoS guard: a flood of distinct bogus kids must not each
+        # trigger an outbound JWKS fetch while the cache is warm.
+        endpoint = FakeJwksEndpoint({"keys": [jwk_for("a", KEY_A)]})
+        endpoint.install(monkeypatch)
+        cache = JwksCache(jwks_url="https://idp.test/jwks", ttl=3600, min_refetch=3600)
+        await cache.get_key("a")  # warm the cache (calls == 1)
+        for i in range(50):
+            with pytest.raises(JwksError):
+                await cache.get_key(f"bogus-{i}")
+        assert endpoint.calls == 1  # no extra fetches despite 50 unknown kids

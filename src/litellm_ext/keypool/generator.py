@@ -86,12 +86,15 @@ def expand_model_list(config: KeypoolConfig) -> list[dict[str, Any]]:
 def region_fallbacks(config: KeypoolConfig) -> list[dict[str, list[str]]]:
     """Router fallbacks for cross-region failover (F13).
 
-    For pool.failover {eu: [us]} and model gpt-4o (with keys in both regions):
-    ``{"gpt-4o-eu": ["gpt-4o-us"]}``. Only emitted when both region aliases
-    exist. Residency-pinned aliases keep exactly these entries out of *their*
-    alias by RBAC granting only the pinned alias — the fallback entry maps the
-    source region alias, so a team allowed only ``gpt-4o-eu`` still hard-fails
-    when EU is down unless it is also granted the bare name.
+    The fallback is keyed on the **bare** model name only. For pool.failover
+    {eu: [us]} and model gpt-4o (keys in both regions) this emits
+    ``{"gpt-4o": ["gpt-4o-us"]}``. This is the residency invariant: a
+    residency-pinned team is granted *only* the region alias (``gpt-4o-eu``),
+    which deliberately carries NO fallback entry, so when EU is down that team
+    hard-fails in-region (503) rather than crossing to a US key. Non-pinned
+    teams call the bare ``gpt-4o`` name and get cross-region failover. Keying
+    the fallback on the region alias (``gpt-4o-eu``) would silently route
+    pinned traffic cross-region — exactly the breach F13 prevents.
     """
     fallbacks: list[dict[str, list[str]]] = []
     for pool in config.pools:
@@ -99,14 +102,16 @@ def region_fallbacks(config: KeypoolConfig) -> list[dict[str, list[str]]]:
             continue
         regions_present = {k.region for k in pool.keys if k.enabled and k.region}
         for model in pool.models:
-            for src, targets in sorted(pool.failover.items()):
+            targets: list[str] = []
+            for src, tgts in sorted(pool.failover.items()):
                 if src not in regions_present:
                     continue
-                valid_targets = [
-                    f"{model.model_name}-{t}" for t in targets if t in regions_present
-                ]
-                if valid_targets:
-                    fallbacks.append({f"{model.model_name}-{src}": valid_targets})
+                for t in tgts:
+                    alias = f"{model.model_name}-{t}"
+                    if t in regions_present and alias not in targets:
+                        targets.append(alias)
+            if targets:
+                fallbacks.append({model.model_name: targets})
     return fallbacks
 
 

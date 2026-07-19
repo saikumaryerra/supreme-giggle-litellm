@@ -24,16 +24,32 @@ class JwksError(Exception):
 
 
 class JwksCache:
-    def __init__(self, jwks_url: str | None = None, ttl: int | None = None) -> None:
+    def __init__(
+        self,
+        jwks_url: str | None = None,
+        ttl: int | None = None,
+        min_refetch: float | None = None,
+    ) -> None:
         settings = get_settings()
         self._url = jwks_url or settings.jwks_url
         self._ttl = ttl if ttl is not None else settings.jwks_cache_ttl
+        # Minimum spacing between IdP fetches triggered by an *unknown* kid.
+        # Caps outbound JWKS traffic at ~1 per interval no matter how many
+        # distinct bogus kids an unauthenticated attacker sends (pre-auth DoS
+        # guard); a genuinely rotated kid is picked up within one interval.
+        self._min_refetch = (
+            min_refetch if min_refetch is not None else settings.jwks_min_refetch_interval
+        )
         self._keys: dict[str, Any] = {}
-        self._fetched_at: float = 0.0
+        # None until the first successful fetch / attempt — a never-populated
+        # cache must always read as expired (don't rely on a 0.0 sentinel,
+        # which looks "fresh" while monotonic() is still below the TTL at boot).
+        self._fetched_at: float | None = None
+        self._last_attempt: float | None = None
         self._lock = asyncio.Lock()
 
     def _expired(self) -> bool:
-        return (time.monotonic() - self._fetched_at) > self._ttl
+        return self._fetched_at is None or (time.monotonic() - self._fetched_at) > self._ttl
 
     async def _refresh(self) -> None:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -58,6 +74,17 @@ class JwksCache:
             # Re-check under the lock: another coroutine may have refreshed.
             if kid in self._keys and not self._expired():
                 return self._keys[kid]
+            # Throttle: for an unknown kid while the cache is still within TTL,
+            # only hit the IdP if we haven't attempted recently. This bounds
+            # outbound fetches (and the lock hold) under a flood of bogus kids.
+            if (
+                kid not in self._keys
+                and not self._expired()
+                and self._last_attempt is not None
+                and (time.monotonic() - self._last_attempt) < self._min_refetch
+            ):
+                raise JwksError("unknown kid (refetch throttled)")
+            self._last_attempt = time.monotonic()
             try:
                 await self._refresh()
             except Exception as exc:

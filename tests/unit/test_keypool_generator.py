@@ -134,8 +134,13 @@ class TestRegions:
         names = {e["model_name"] for e in expand_model_list(config(self.RAW))}
         assert names == {"gpt-4o", "gpt-4o-eu", "gpt-4o-us"}
 
-    def test_cross_region_fallback(self) -> None:
-        assert region_fallbacks(config(self.RAW)) == [{"gpt-4o-eu": ["gpt-4o-us"]}]
+    def test_cross_region_fallback_keyed_on_bare_name(self) -> None:
+        # Residency invariant: fallback attaches to the BARE name only, never
+        # to the pinned region alias — so pinned teams (granted only gpt-4o-eu)
+        # hard-fail in-region instead of crossing to a US key.
+        result = region_fallbacks(config(self.RAW))
+        assert result == [{"gpt-4o": ["gpt-4o-us"]}]
+        assert not any("gpt-4o-eu" in fb for fb in result)
 
     def test_fallback_skipped_when_target_region_absent(self) -> None:
         raw = {
@@ -178,7 +183,7 @@ class TestRenderConfig:
         names = [e["model_name"] for e in result["model_list"]]
         assert names[0] == "manual"  # template's own model_list preserved
         assert set(names[1:]) == {"gpt-4o", "gpt-4o-eu", "gpt-4o-us"}
-        assert result["router_settings"]["fallbacks"] == [{"gpt-4o-eu": ["gpt-4o-us"]}]
+        assert result["router_settings"]["fallbacks"] == [{"gpt-4o": ["gpt-4o-us"]}]
         assert result["general_settings"] == {"master_key": "os.environ/MK"}
         assert "sk-secret" not in out.read_text()  # env refs only, never values
 

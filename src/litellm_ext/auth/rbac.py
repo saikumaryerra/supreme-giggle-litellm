@@ -32,8 +32,16 @@ class ResolvedPermissions:
     max_budget: float | None = None
     allowed_routes: list[str] = field(default_factory=lambda: ["*"])
     priority: str = "standard"  # F12 tier: interactive | standard | batch
-    allowed_cidrs: list[str] = field(default_factory=list)  # F5 per-team CIDRs
+    # F5: role and team CIDRs are kept separate so they can be enforced as an
+    # intersection (both must pass) rather than a union that would let a
+    # permissive team widen a restrictive role.
+    role_cidrs: list[str] = field(default_factory=list)
+    team_cidrs: list[str] = field(default_factory=list)
     allowed_regions: list[str] = field(default_factory=list)  # F13 residency pin
+
+    @property
+    def allowed_cidrs(self) -> list[str]:  # back-compat: union view for display
+        return self.role_cidrs + self.team_cidrs
 
 
 class RbacEngine:
@@ -55,10 +63,6 @@ class RbacEngine:
         if allowed_regions:
             models = pin_models_to_regions(models, allowed_regions)
 
-        allowed_cidrs = list(mapping.get("allowed_cidrs") or []) + list(
-            team_cfg.get("allowed_cidrs") or []
-        )
-
         return ResolvedPermissions(
             matched_role=role_name,
             litellm_role=str(mapping.get("litellm_role", "internal_user")),
@@ -68,7 +72,8 @@ class RbacEngine:
             max_budget=mapping.get("max_budget"),
             allowed_routes=list(mapping.get("allowed_routes") or ["*"]),
             priority=str(mapping.get("priority", "standard")),
-            allowed_cidrs=allowed_cidrs,
+            role_cidrs=list(mapping.get("allowed_cidrs") or []),
+            team_cidrs=list(team_cfg.get("allowed_cidrs") or []),
             allowed_regions=allowed_regions,
         )
 

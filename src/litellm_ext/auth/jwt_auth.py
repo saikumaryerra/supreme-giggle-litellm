@@ -44,9 +44,12 @@ from litellm_ext.redis_client import (
     BLOCKED_USERS_SET,
     BUDGET_EXHAUSTED_SET,
     DEACTIVATED_USERS_SET,
+    RedisUnavailable,
     get_downgrade_models,
     set_contains,
+    set_contains_strict,
 )
+from litellm_ext.regions.residency import pin_models_to_regions
 from litellm_ext.settings import get_settings
 
 
@@ -147,14 +150,28 @@ async def user_api_key_auth(request: Request, api_key: str) -> Any:
             client_ip, claims.sub,
         ) from None
 
-    # Step 6.4 (F5): per-role/team network restriction — valid JWT, wrong network.
-    if not check_team_cidrs(client_ip, resolved.allowed_cidrs):
+    # Step 6.4 (F5): per-role/team network restriction — valid JWT, wrong
+    # network. Role and team CIDRs are an INTERSECTION: the IP must satisfy
+    # both non-empty sets, so a permissive team can't widen a restrictive role.
+    if not check_team_cidrs(client_ip, resolved.role_cidrs) or not check_team_cidrs(
+        client_ip, resolved.team_cidrs
+    ):
         raise _deny(403, "ip_blocked_team", "source address not permitted", client_ip, claims.sub)
 
-    # Step 6.5 (F6): SCIM deactivation must not wait for token expiry.
-    if await set_contains(DEACTIVATED_USERS_SET, claims.sub) or await set_contains(
-        BLOCKED_USERS_SET, claims.sub
-    ):
+    # Step 6.5 (F6): SCIM deactivation must not wait for token expiry. This is
+    # a revocation check — fail closed if a configured Redis is unreachable.
+    try:
+        revoked = await set_contains_strict(
+            DEACTIVATED_USERS_SET, claims.sub
+        ) or await set_contains_strict(BLOCKED_USERS_SET, claims.sub)
+    except RedisUnavailable:
+        if settings.revocation_fail_closed:
+            raise _deny(
+                403, "revocation_unavailable", "user_check_unavailable",
+                client_ip, claims.sub,
+            ) from None
+        revoked = False
+    if revoked:
         raise _deny(403, "user_deactivated", "user_deactivated", client_ip, claims.sub)
 
     # Step 6.6 (F9): budget enforcement / downgrade.
@@ -167,15 +184,31 @@ async def user_api_key_auth(request: Request, api_key: str) -> Any:
             )
         downgrade = await get_downgrade_models(claims.team)
         if downgrade is not None:
-            models = [m for m in models if m in downgrade] or list(downgrade)
+            # Intersect only — never grant a model the role didn't already have.
+            # Re-apply residency pinning so a downgraded EU-pinned team can't be
+            # handed un-suffixed names that reach cross-region fallbacks (F13).
+            allowed_downgrade = downgrade
+            if resolved.allowed_regions:
+                allowed_downgrade = pin_models_to_regions(
+                    downgrade, resolved.allowed_regions
+                )
+            models = [m for m in models if m in allowed_downgrade]
 
-    # Step 7: hand LiteLLM the enforcement surface.
+    # Step 7: hand LiteLLM the enforcement surface. A typo'd litellm_role in
+    # rbac.yaml is a config error → deny cleanly (fail closed), not a 500.
+    try:
+        litellm_role = LitellmUserRoles(resolved.litellm_role)
+    except ValueError:
+        raise _deny(
+            403, "role_config_error", "role configuration error",
+            client_ip, claims.sub,
+        ) from None
     ext_auth_success_total.labels(role=resolved.matched_role).inc()
     return UserAPIKeyAuth(
         api_key=hash_token(token),
         user_id=claims.sub,
         user_email=claims.email,
-        user_role=LitellmUserRoles(resolved.litellm_role),
+        user_role=litellm_role,
         team_id=claims.team,
         models=models,
         tpm_limit=resolved.tpm_limit,
