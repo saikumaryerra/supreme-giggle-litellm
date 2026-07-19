@@ -1,0 +1,87 @@
+# §8.3: all four CronJobs run the ext image with a different entry module,
+# share the audit-DB Secret, and get least-privilege ServiceAccounts.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: audit-retention          # §6.5 — daily purge
+spec:
+  schedule: "30 1 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: litellm-cron
+          restartPolicy: Never
+          containers:
+            - name: retention
+              image: ghcr.io/YOUR_ORG/litellm-ext:latest
+              command: ["python", "-m", "litellm_ext.audit.retention"]
+              envFrom: [{secretRef: {name: litellm-secrets}}, {configMapRef: {name: litellm-ext-env}}]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: budget-check             # §7B.5 — every 5 minutes
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: litellm-cron
+          restartPolicy: Never
+          containers:
+            - name: budgets
+              image: ghcr.io/YOUR_ORG/litellm-ext:latest
+              command: ["python", "-m", "litellm_ext.costgov.budgets"]
+              envFrom: [{secretRef: {name: litellm-secrets}}, {configMapRef: {name: litellm-ext-env}}]
+              volumeMounts:
+                - {name: config, mountPath: /app/config/budgets.yaml, subPath: budgets.yaml}
+          volumes:
+            - name: config
+              configMap: {name: litellm-ext-config}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: chargeback-report        # §7B.5 — monthly, 1st 02:00
+spec:
+  schedule: "0 2 1 * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: litellm-cron
+          restartPolicy: Never
+          containers:
+            - name: chargeback
+              image: ghcr.io/YOUR_ORG/litellm-ext:latest
+              command: ["python", "-m", "litellm_ext.costgov.chargeback"]
+              envFrom: [{secretRef: {name: litellm-secrets}}, {configMapRef: {name: litellm-ext-env}}]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: key-rotation             # §7B.6 — daily
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: litellm-cron
+          restartPolicy: Never
+          containers:
+            - name: rotate
+              image: ghcr.io/YOUR_ORG/litellm-ext:latest
+              command: ["python", "-m", "litellm_ext.keyrotation.rotate"]
+              envFrom: [{secretRef: {name: litellm-secrets}}, {configMapRef: {name: litellm-ext-env}}]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: litellm-cron

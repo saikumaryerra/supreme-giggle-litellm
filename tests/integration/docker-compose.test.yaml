@@ -1,0 +1,92 @@
+# §9.4 / §10: full integration stack — the gate for any LiteLLM version bump.
+# Build the wheel first: python -m build --wheel  (CI does this automatically)
+services:
+  litellm:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    ports: ["4000:4000"]
+    environment:
+      LITELLM_MASTER_KEY: sk-master-test
+      DATABASE_URL: postgresql://litellm:litellm@litellm-db:5432/litellm
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ""
+      OPENAI_API_KEY_A: sk-mock-key-a
+      OPENAI_API_KEY_B: sk-mock-key-b
+      ANTHROPIC_API_KEY_1: sk-mock-anthropic-1
+      ANTHROPIC_API_KEY_2: sk-mock-anthropic-2
+      # Route both providers at the mock (upstream model prefixes use api_base).
+      OPENAI_BASE_URL: http://mock-provider:9000/v1
+      LITELLM_EXT_JWT_ISSUER: https://mock-idp.test/realm
+      LITELLM_EXT_JWT_AUDIENCE: litellm-proxy
+      LITELLM_EXT_JWKS_URL: http://mock-idp:9001/jwks
+      LITELLM_EXT_RBAC_CONFIG_PATH: /app/config/rbac.yaml
+      LITELLM_EXT_AUDIT_DB_URL: postgresql+asyncpg://audit:audit@audit-db:5432/audit
+      LITELLM_EXT_PRESIDIO_ANALYZER_URL: http://presidio-analyzer:3000
+      LITELLM_EXT_PRESIDIO_ANONYMIZER_URL: http://presidio-anonymizer:3000
+      LITELLM_EXT_PII_ACTION: mask
+      LITELLM_EXT_GUARDRAIL_FAIL_MODE: open
+      LITELLM_EXT_REDIS_HOST: redis
+    depends_on:
+      litellm-db: {condition: service_healthy}
+      audit-db: {condition: service_healthy}
+      redis: {condition: service_started}
+      mock-idp: {condition: service_started}
+      mock-provider: {condition: service_started}
+      presidio-analyzer: {condition: service_started}
+      presidio-anonymizer: {condition: service_started}
+
+  litellm-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+      POSTGRES_DB: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm"]
+      interval: 2s
+      retries: 20
+
+  audit-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: audit
+      POSTGRES_PASSWORD: audit
+      POSTGRES_DB: audit
+    ports: ["55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U audit"]
+      interval: 2s
+      retries: 20
+
+  audit-migrate:
+    build:
+      context: ../..
+      dockerfile: docker/Dockerfile
+    entrypoint: ["sh", "-c", "cd /app && alembic upgrade head"]
+    environment:
+      LITELLM_EXT_AUDIT_DB_URL: postgresql+asyncpg://audit:audit@audit-db:5432/audit
+    depends_on:
+      audit-db: {condition: service_healthy}
+
+  redis:
+    image: redis:7-alpine
+    ports: ["56379:6379"]
+
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    environment: {PORT: "3000"}
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:latest
+    environment: {PORT: "3000"}
+
+  mock-idp:
+    build: {context: ./mocks}
+    environment: {APP: "mock_idp:app", PORT: "9001"}
+    ports: ["9001:9001"]
+
+  mock-provider:
+    build: {context: ./mocks}
+    environment: {APP: "mock_provider:app", PORT: "9000"}
+    ports: ["9000:9000"]

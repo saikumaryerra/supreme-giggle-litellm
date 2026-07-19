@@ -1,0 +1,41 @@
+# Mounted YAMLs (keypool/rbac/budgets) + non-secret LITELLM_EXT_* env.
+# In GitOps these files are templated from config/ at deploy time.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-ext-config
+data:
+  keypool.yaml: |
+    # copy of config/keypool.yaml — deploy tooling injects the real one
+    pools: []
+  rbac.yaml: |
+    # copy of config/rbac.yaml
+    roles: {}
+    default: {action: deny}
+  budgets.yaml: |
+    # copy of config/budgets.yaml
+    teams: {}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-ext-env
+data:
+  LITELLM_EXT_JWT_ISSUER: "https://idp.example.com/realms/main"
+  LITELLM_EXT_JWT_AUDIENCE: "litellm-proxy"
+  LITELLM_EXT_JWKS_URL: "https://idp.example.com/realms/main/protocol/openid-connect/certs"
+  LITELLM_EXT_ROLE_CLAIM: "roles"
+  LITELLM_EXT_TEAM_CLAIM: "groups"
+  LITELLM_EXT_RBAC_CONFIG_PATH: "/app/config/rbac.yaml"
+  LITELLM_EXT_BUDGETS_CONFIG_PATH: "/app/config/budgets.yaml"
+  LITELLM_EXT_PRESIDIO_ANALYZER_URL: "http://presidio-analyzer:3000"
+  LITELLM_EXT_PRESIDIO_ANONYMIZER_URL: "http://presidio-anonymizer:3000"
+  LITELLM_EXT_PII_ACTION: "mask"
+  LITELLM_EXT_GUARDRAIL_FAIL_MODE: "closed"
+  LITELLM_EXT_AUDIT_LOG_BODIES: "hash"
+  LITELLM_EXT_REDIS_HOST: "redis"
+  LITELLM_EXT_DOCS_FILTERED: "true"
+  LITELLM_EXT_DOCS_TITLE: "Enterprise LLM Gateway"
+  LITELLM_EXT_SCIM_ENABLED: "true"
+  LITELLM_EXT_SCIM_TEAM_PREFIX: "llm-"
+  LITELLM_EXT_LITELLM_API_BASE: "http://litellm:4000"

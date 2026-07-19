@@ -1,0 +1,78 @@
+# §6.5: audit Postgres. Prefer a managed instance in production; this
+# manifest covers self-hosted evaluation. Tamper-resistance roles (§12):
+# the app writes with INSERT-only, auditors read with a separate role.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: audit-db
+spec:
+  serviceName: audit-db
+  replicas: 1
+  selector:
+    matchLabels: {app: audit-db}
+  template:
+    metadata:
+      labels: {app: audit-db}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          envFrom:
+            - secretRef: {name: audit-db-credentials}
+          ports: [{containerPort: 5432}]
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: {requests: {storage: 50Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-db
+spec:
+  selector: {app: audit-db}
+  ports: [{port: 5432, targetPort: 5432}]
+---
+# One-time roles/migration Job (re-run on schema changes; alembic is idempotent)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: audit-db-migrate
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ghcr.io/YOUR_ORG/litellm-ext:latest
+          command: ["sh", "-c"]
+          args:
+            - |
+              cd /app && alembic upgrade head && python - <<'EOF'
+              # INSERT-only app role + read-only auditor role (§6.5, §12)
+              import asyncio, asyncpg, os
+              async def roles():
+                  dsn = os.environ["LITELLM_EXT_AUDIT_DB_URL"].replace("postgresql+asyncpg://", "postgresql://")
+                  conn = await asyncpg.connect(dsn)
+                  await conn.execute("""
+                    DO $$ BEGIN
+                      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='litellm_ext_app') THEN
+                        CREATE ROLE litellm_ext_app LOGIN PASSWORD 'CHANGE_ME';
+                      END IF;
+                      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='litellm_ext_auditor') THEN
+                        CREATE ROLE litellm_ext_auditor LOGIN PASSWORD 'CHANGE_ME';
+                      END IF;
+                    END $$;
+                    GRANT INSERT ON audit_events TO litellm_ext_app;
+                    GRANT SELECT ON audit_events TO litellm_ext_auditor;
+                  """)
+                  await conn.close()
+              asyncio.run(roles())
+              EOF
+          envFrom:
+            - secretRef: {name: litellm-secrets}

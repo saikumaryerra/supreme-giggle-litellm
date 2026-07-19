@@ -1,0 +1,51 @@
+# §8.3: LiteLLM → Presidio/Postgres/Redis, deny otherwise; Presidio no egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: presidio-ingress-only-from-litellm
+spec:
+  podSelector:
+    matchExpressions:
+      - {key: app, operator: In, values: [presidio-analyzer, presidio-anonymizer]}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: litellm}}
+      ports:
+        - {protocol: TCP, port: 3000}
+  egress: []   # Presidio has no egress (§8.3)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: litellm-egress
+spec:
+  podSelector:
+    matchLabels: {app: litellm}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - {key: app, operator: In, values: [presidio-analyzer, presidio-anonymizer, redis]}
+    - ports:  # Postgres (in-cluster or managed)
+        - {protocol: TCP, port: 5432}
+    - ports:  # provider APIs + IdP JWKS over TLS
+        - {protocol: TCP, port: 443}
+    - ports:  # DNS
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-only-from-litellm
+spec:
+  podSelector:
+    matchLabels: {app: redis}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: litellm}}
+      ports:
+        - {protocol: TCP, port: 6379}

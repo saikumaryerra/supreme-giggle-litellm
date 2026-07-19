@@ -1,0 +1,76 @@
+# §7.2: Presidio analyzer + anonymizer, ClusterIP-only, HPA'd.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: presidio-analyzer
+  labels: {app: presidio-analyzer}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: presidio-analyzer}
+  template:
+    metadata:
+      labels: {app: presidio-analyzer}
+    spec:
+      containers:
+        - name: analyzer
+          image: mcr.microsoft.com/presidio-analyzer:latest
+          env: [{name: PORT, value: "3000"}]
+          ports: [{containerPort: 3000}]
+          resources:
+            requests: {cpu: "1", memory: 1.5Gi}   # spaCy-based (§7.2)
+            limits: {memory: 3Gi}
+          readinessProbe:
+            httpGet: {path: /health, port: 3000}
+            initialDelaySeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: presidio-analyzer
+spec:
+  selector: {app: presidio-analyzer}
+  ports: [{port: 3000, targetPort: 3000}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: presidio-anonymizer
+  labels: {app: presidio-anonymizer}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: presidio-anonymizer}
+  template:
+    metadata:
+      labels: {app: presidio-anonymizer}
+    spec:
+      containers:
+        - name: anonymizer
+          image: mcr.microsoft.com/presidio-anonymizer:latest
+          env: [{name: PORT, value: "3000"}]
+          ports: [{containerPort: 3000}]
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: presidio-anonymizer
+spec:
+  selector: {app: presidio-anonymizer}
+  ports: [{port: 3000, targetPort: 3000}]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: presidio-analyzer
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: presidio-analyzer}
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}

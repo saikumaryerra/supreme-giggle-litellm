@@ -1,0 +1,52 @@
+# §11: Prometheus alert rules for litellm-ext.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: litellm-ext-alerts
+spec:
+  groups:
+    - name: litellm-ext
+      rules:
+        - alert: AuthDeniedSpike
+          expr: sum(rate(ext_auth_denied_total[5m])) > 5
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: "Auth denial spike ({{ $value | printf \"%.1f\" }}/s over 5m)"
+        - alert: AuditEventsDropped
+          expr: increase(audit_events_dropped_total[5m]) > 0
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: "Audit events are being dropped — check audit DB / queue"
+        - alert: PresidioCircuitOpen
+          expr: ext_presidio_circuit_open == 1
+          for: 2m
+          labels: {severity: critical}
+          annotations:
+            summary: "Presidio circuit breaker open > 2m — guardrail degraded"
+        - alert: KeyDominatesPool                       # §7A.4
+          expr: |
+            max by (model) (
+              sum by (model, key_id) (rate(keypool_requests_total[15m]))
+              / ignoring(key_id) group_left
+              sum by (model) (rate(keypool_requests_total[15m]))
+            ) > 0.9
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: "One provider key is taking >90% of a pool's traffic"
+        - alert: KeyErrorRateHigh
+          expr: |
+            sum by (key_id) (rate(keypool_requests_total{status!="success"}[10m]))
+            / sum by (key_id) (rate(keypool_requests_total[10m])) > 0.2
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Provider key {{ $labels.key_id }} error rate > 20%"
+        - alert: QosBatchStarvation                     # §7B.8
+          expr: sum(rate(ext_qos_rejections_total{tier="batch"}[15m])) > 1
+          for: 15m
+          labels: {severity: info}
+          annotations:
+            summary: "Batch tier rejections sustained — capacity review needed"

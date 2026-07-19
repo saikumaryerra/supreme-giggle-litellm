@@ -1,0 +1,73 @@
+# §2/§8.3: nginx ingress — /ui via oauth2-proxy, /v1 to the proxy pods,
+# /scim/v2 restricted to the IdP's egress ranges (F6), CIDR allow mirrored
+# from LITELLM_EXT_IP_ALLOWLIST for defense in depth (F5).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: litellm-api
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    # F5 defense in depth — keep in sync with LITELLM_EXT_IP_ALLOWLIST:
+    # nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,192.168.0.0/16"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: llm.example.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend: {service: {name: litellm, port: {number: 4000}}}
+          - path: /chat
+            pathType: Prefix
+            backend: {service: {name: litellm, port: {number: 4000}}}
+          - path: /health
+            pathType: Prefix
+            backend: {service: {name: litellm, port: {number: 4000}}}
+  tls:
+    - hosts: [llm.example.com]
+      secretName: llm-tls
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: litellm-ui
+  annotations:
+    # UI (and any admin path) goes through oauth2-proxy — OIDC at the edge.
+    nginx.ingress.kubernetes.io/auth-url: "http://oauth2-proxy.default.svc.cluster.local:4180/oauth2/auth"
+    nginx.ingress.kubernetes.io/auth-signin: "https://llm.example.com/oauth2/start?rd=$escaped_request_uri"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: llm.example.com
+      http:
+        paths:
+          - path: /ui
+            pathType: Prefix
+            backend: {service: {name: oauth2-proxy, port: {number: 4180}}}
+          - path: /oauth2
+            pathType: Prefix
+            backend: {service: {name: oauth2-proxy, port: {number: 4180}}}
+  tls:
+    - hosts: [llm.example.com]
+      secretName: llm-tls
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: litellm-scim
+  annotations:
+    # F6: SCIM reachable only from the IdP's egress ranges (§8.3).
+    nginx.ingress.kubernetes.io/whitelist-source-range: "REPLACE_WITH_IDP_EGRESS_CIDRS"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: llm.example.com
+      http:
+        paths:
+          - path: /scim/v2
+            pathType: Prefix
+            backend: {service: {name: litellm, port: {number: 8090}}}
+  tls:
+    - hosts: [llm.example.com]
+      secretName: llm-tls

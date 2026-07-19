@@ -1,0 +1,36 @@
+# Redis: router cooldown state, DualCache rate limits, semantic cache,
+# enforcement sets (deactivation/budget), QoS buckets. Per-region in
+# multi-region deployments to avoid cross-region rate-limit chatter (§7B.9).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels: {app: redis}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: redis}
+  template:
+    metadata:
+      labels: {app: redis}
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          args: ["--appendonly", "yes"]
+          ports: [{containerPort: 6379}]
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      volumes:
+        - name: data
+          emptyDir: {}   # use a PVC / managed Redis in production
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  selector: {app: redis}
+  ports: [{port: 6379, targetPort: 6379}]

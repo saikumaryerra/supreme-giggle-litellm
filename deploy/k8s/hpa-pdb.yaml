@@ -1,0 +1,41 @@
+# §8.3: HPA (CPU 70%, 2-10) + PodDisruptionBudgets.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: litellm
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: litellm}
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: 70}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: litellm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: litellm}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: presidio-analyzer
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: presidio-analyzer}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: presidio-anonymizer
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: presidio-anonymizer}
