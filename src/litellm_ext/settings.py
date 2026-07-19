@@ -9,10 +9,14 @@ from __future__ import annotations
 
 from enum import Enum
 from functools import lru_cache
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# Env lists accept comma-separated strings ("a,b") or JSON ('["a","b"]');
+# NoDecode defers parsing to the _split_csv validator below.
+StrList = Annotated[list[str], NoDecode]
 
 
 class BodyPolicy(str, Enum):
@@ -43,7 +47,7 @@ class Settings(BaseSettings):
     jwt_audience: str = ""
     jwks_url: str = ""
     jwks_cache_ttl: int = 3600
-    jwt_algorithms: list[str] = Field(default_factory=lambda: ["RS256"])
+    jwt_algorithms: StrList = Field(default_factory=lambda: ["RS256"])
     jwt_clock_skew: int = 60
     role_claim: str = "roles"
     team_claim: str = "groups"
@@ -61,7 +65,7 @@ class Settings(BaseSettings):
     presidio_analyzer_url: str = ""
     presidio_anonymizer_url: str = ""
     pii_action: PiiAction = PiiAction.mask
-    pii_entities: list[str] = Field(
+    pii_entities: StrList = Field(
         default_factory=lambda: [
             "EMAIL_ADDRESS",
             "PHONE_NUMBER",
@@ -78,8 +82,8 @@ class Settings(BaseSettings):
     guardrail_timeout_ms: int = 1500
 
     # --- F5: network & surface security ------------------------------------
-    ip_allowlist: list[str] = Field(default_factory=list)  # CIDRs; empty = disabled
-    trusted_proxies: list[str] = Field(default_factory=list)  # CIDRs whose XFF is honored
+    ip_allowlist: StrList = Field(default_factory=list)  # CIDRs; empty = disabled
+    trusted_proxies: StrList = Field(default_factory=list)  # CIDRs whose XFF is honored
     docs_filtered: bool = False
     docs_title: str = "LLM Gateway"
     docs_description: str = "Enterprise LLM gateway"
@@ -113,7 +117,7 @@ class Settings(BaseSettings):
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_from: str = ""
-    smtp_to: list[str] = Field(default_factory=list)
+    smtp_to: StrList = Field(default_factory=list)
     reports_bucket: str = ""  # S3-compatible bucket for chargeback reports
     repo_token: str = ""  # GitHub/GitLab token for access-request PRs
     repo_url: str = ""  # e.g. https://api.github.com/repos/org/litellm-ext
@@ -151,7 +155,12 @@ class Settings(BaseSettings):
     @classmethod
     def _split_csv(cls, v: Any) -> Any:
         """Accept comma-separated strings in env vars as well as JSON lists."""
-        if isinstance(v, str) and not v.strip().startswith("["):
+        if isinstance(v, str):
+            stripped = v.strip()
+            if stripped.startswith("["):
+                import json
+
+                return json.loads(stripped)
             return [item.strip() for item in v.split(",") if item.strip()]
         return v
 
