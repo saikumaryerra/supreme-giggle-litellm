@@ -1,0 +1,62 @@
+# LiteLLM proxy config template (§8.1).
+# model_list is generated at startup by litellm_ext.keypool.generator from
+# keypool.yaml — do not hand-maintain deployments here.
+model_list: []
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL          # LiteLLM's own Postgres (keys/teams/spend)
+  custom_auth: litellm_ext.auth.jwt_auth.user_api_key_auth
+  custom_auth_run_common_checks: true
+
+litellm_settings:
+  callbacks:
+    - litellm_ext.audit.logger.audit_logger_instance
+    - litellm_ext.keypool.telemetry.keypool_logger_instance
+  drop_params: true
+  request_timeout: 120
+  # F11 — native semantic cache (contract test verifies the pinned version
+  # supports type: redis-semantic; see tests/contract/test_semantic_cache_contract.py)
+  cache: true
+  cache_params:
+    type: redis-semantic
+    similarity_threshold: 0.90
+    redis_semantic_cache_embedding_model: text-embedding-3-small
+    ttl: 3600
+
+guardrails:
+  - guardrail_name: "pii-shield"                 # F3
+    litellm_params:
+      guardrail: litellm_ext.guardrails.pii_guardrail.PiiGuardrail
+      mode: [pre_call, post_call]
+      default_on: true
+  - guardrail_name: "secrets-shield"             # F8a
+    litellm_params:
+      guardrail: litellm_ext.guardrails.secrets_guardrail.SecretsGuardrail
+      mode: pre_call
+      default_on: true
+  - guardrail_name: "injection-shield"           # F8b
+    litellm_params:
+      guardrail: litellm_ext.guardrails.injection_guardrail.InjectionGuardrail
+      mode: pre_call
+      default_on: true
+  - guardrail_name: "lists-shield"               # F8d — blocked users + banned keywords
+    litellm_params:
+      guardrail: litellm_ext.guardrails.lists_guardrail.ListsGuardrail
+      mode: pre_call
+      default_on: true
+  - guardrail_name: "moderation"                 # F8c — opt-in per team
+    litellm_params:
+      guardrail: litellm_ext.guardrails.moderation_guardrail.ModerationGuardrail
+      mode: [pre_call, post_call]
+      default_on: false
+
+router_settings:                                 # §7A.7
+  routing_strategy: simple-shuffle               # honors weights; usage-based-routing-v2 (Redis) at scale
+  num_retries: 2                                 # retry lands on a different key
+  allowed_fails: 3
+  cooldown_time: 30                              # seconds a failing key is benched
+  redis_host: os.environ/REDIS_HOST              # required for multi-replica correctness
+  redis_password: os.environ/REDIS_PASSWORD
+
+environment_variables: {}                        # secrets come from K8s, not here

@@ -1,0 +1,58 @@
+# F4: declarative key-pool definition (§7A.2).
+# Every enabled key becomes one model_list deployment per exposed model_name.
+# Secrets stay in env vars (K8s Secret) — this file only names them.
+pools:
+  - provider: openai
+    models:
+      - model_name: gpt-4o
+        upstream_model: openai/gpt-4o
+      - model_name: gpt-4o-mini
+        upstream_model: openai/gpt-4o-mini
+    keys:
+      - key_id: openai-team-a          # stable logical ID (never the secret)
+        api_key_env: OPENAI_API_KEY_A
+        weight: 2                      # higher-tier account gets more traffic
+        tpm: 2000000
+        rpm: 5000
+        enabled: true
+      - key_id: openai-team-b
+        api_key_env: OPENAI_API_KEY_B
+        weight: 1
+        tpm: 450000
+        rpm: 1000
+        enabled: true
+      - key_id: openai-old-2025        # draining: no new traffic, kept for reference
+        api_key_env: OPENAI_API_KEY_OLD
+        enabled: false
+
+  - provider: anthropic
+    models:
+      - model_name: claude-sonnet
+        upstream_model: anthropic/claude-sonnet-4-5
+    keys:
+      - key_id: anthropic-prod-1
+        api_key_env: ANTHROPIC_API_KEY_1
+        weight: 1
+        rpm: 4000
+      - key_id: anthropic-prod-2
+        api_key_env: ANTHROPIC_API_KEY_2
+        weight: 1
+        rpm: 4000
+
+  # F13 example: regional Azure OpenAI keys with EU→US failover for the bare
+  # alias; residency-pinned teams are granted only gpt-4o-az-eu via rbac.yaml.
+  # - provider: azure
+  #   models:
+  #     - model_name: gpt-4o-az
+  #       upstream_model: azure/gpt-4o
+  #   failover:
+  #     eu: [us]
+  #   keys:
+  #     - key_id: azure-eu-1
+  #       api_key_env: AZURE_API_KEY_EU
+  #       region: eu
+  #       api_base: https://myorg-eu.openai.azure.com
+  #     - key_id: azure-us-1
+  #       api_key_env: AZURE_API_KEY_US
+  #       region: us
+  #       api_base: https://myorg-us.openai.azure.com

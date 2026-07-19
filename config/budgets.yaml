@@ -1,0 +1,17 @@
+# F9: budget source of truth (§7B.5). Evaluated every 5 minutes by the
+# budget-check CronJob against month-to-date spend in the audit DB.
+teams:
+  data-science:
+    monthly_usd: 2000
+    alert_pcts: [80, 100]
+    on_exhaust: enforce                # enforce | alert_only | downgrade
+  app-backend:
+    monthly_usd: 5000
+    alert_pcts: [50, 80, 100]
+    on_exhaust: downgrade
+    downgrade_models: [gpt-4o-mini]
+
+users_default:
+  monthly_usd: 200
+  alert_pcts: [80, 100]
+  on_exhaust: alert_only

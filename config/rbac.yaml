@@ -1,0 +1,47 @@
+# Maps IdP roles → LiteLLM permissions (§4). First match wins; "default"
+# applies if none match. Optional per-role/per-team fields consumed by
+# extended features: allowed_cidrs (F5), priority (F12), allowed_regions (F13).
+roles:
+  llm-admin:
+    litellm_role: proxy_admin          # maps to LitellmUserRoles.PROXY_ADMIN
+    models: ["*"]
+    tpm_limit: null
+    rpm_limit: null
+    max_budget: null
+    allowed_routes: ["*"]
+    priority: interactive
+
+  llm-engineer:
+    litellm_role: internal_user
+    models: ["gpt-4o", "claude-sonnet", "gpt-4o-mini"]
+    tpm_limit: 200000
+    rpm_limit: 500
+    max_budget: 500.0                  # USD / month
+    allowed_routes:
+      - "/chat/completions"
+      - "/v1/chat/completions"
+      - "/embeddings"
+      - "/v1/embeddings"
+      - "/models"
+      - "/v1/models"
+    priority: standard
+
+  llm-app-service:                     # machine-to-machine client-credential tokens
+    litellm_role: internal_user
+    models: ["gpt-4o-mini"]
+    tpm_limit: 1000000
+    rpm_limit: 2000
+    max_budget: 2000.0
+    allowed_routes: ["/chat/completions", "/v1/chat/completions"]
+    priority: batch
+
+default:
+  action: deny                         # deny | map
+  # litellm_role: internal_user        (only if action: map)
+
+teams:                                 # optional per-team overrides keyed by TEAM_CLAIM value
+  data-science:
+    extra_models: ["o3"]
+  # eu-finance:
+  #   allowed_regions: [eu]            # F13: residency pin — sees gpt-4o-az-eu only
+  #   allowed_cidrs: ["10.20.0.0/16"]  # F5: JWT valid but wrong network → 403
