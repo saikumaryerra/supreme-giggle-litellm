@@ -13,6 +13,8 @@ litellm_settings:
   callbacks:
     - litellm_ext.audit.logger.audit_logger_instance
     - litellm_ext.keypool.telemetry.keypool_logger_instance
+    - prometheus                 # §11 — serves /metrics (default registry, where
+                                 # our ext_*/keypool_* counters register)
   drop_params: true
   request_timeout: 120
   # F11 — native semantic cache (contract test verifies the pinned version
@@ -50,6 +52,11 @@ guardrails:
       guardrail: litellm_ext.guardrails.moderation_guardrail.ModerationGuardrail
       mode: [pre_call, post_call]
       default_on: false
+  - guardrail_name: "qos-priority"               # F12 v2 — no-op unless
+    litellm_params:                              # LITELLM_EXT_QOS_ENABLED=true
+      guardrail: litellm_ext.qos.priority.QosPriorityGuardrail
+      mode: pre_call
+      default_on: true
 
 router_settings:                                 # §7A.7
   routing_strategy: simple-shuffle               # honors weights; usage-based-routing-v2 (Redis) at scale

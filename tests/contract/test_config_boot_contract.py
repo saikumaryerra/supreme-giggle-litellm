@@ -46,8 +46,16 @@ class TestTemplateReferences:
         callbacks = template["litellm_settings"]["callbacks"]
         assert len(callbacks) >= 2  # audit + keypool telemetry
         for path in callbacks:
+            if "." not in path:
+                continue  # built-in callback name (e.g. "prometheus")
             instance = resolve_dotted(path)
             assert isinstance(instance, CustomLogger), path
+
+    def test_prometheus_metrics_enabled(self) -> None:
+        # §11: without this, /metrics is never served and all custom counters
+        # are inert. Guard against silently dropping it.
+        template = load_template()
+        assert "prometheus" in template["litellm_settings"]["callbacks"]
 
     def test_all_guardrails_resolve(self) -> None:
         from litellm.integrations.custom_guardrail import CustomGuardrail
