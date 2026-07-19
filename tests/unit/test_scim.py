@@ -37,11 +37,12 @@ class FakeRedis:
     def __init__(self) -> None:
         self.sets: dict[str, set[str]] = {}
 
-    async def sadd(self, name: str, member: str) -> None:
-        self.sets.setdefault(name, set()).add(member)
+    async def sadd(self, name: str, *members: str) -> None:
+        self.sets.setdefault(name, set()).update(members)
 
-    async def srem(self, name: str, member: str) -> None:
-        self.sets.get(name, set()).discard(member)
+    async def srem(self, name: str, *members: str) -> None:
+        for member in members:
+            self.sets.get(name, set()).discard(member)
 
 
 @pytest.fixture()
@@ -169,6 +170,40 @@ class TestOktaSmokeSequence:
         assert resp.status_code == 204
         assert "okta-gone" in fake_redis.sets.get("ext:deactivated_users", set())
 
+    async def test_deactivation_adds_all_identities(self, scim: Any) -> None:
+        # sub may equal externalId, userName, or the SCIM id — add all so the
+        # deactivation set matches whichever the JWT presents.
+        client, _, fake_redis = scim
+        resp = await client.post(
+            "/Users",
+            json={"userName": "multi@example.com", "externalId": "okta-multi"},
+        )
+        user_id = resp.json()["id"]
+        await client.patch(
+            f"/Users/{user_id}",
+            json={"Operations": [{"op": "replace", "path": "active", "value": False}]},
+        )
+        deactivated = fake_redis.sets.get("ext:deactivated_users", set())
+        assert {"okta-multi", "multi@example.com", user_id} <= deactivated
+
+    async def test_group_filter_by_display_name(self, scim: Any) -> None:
+        client, _, _ = scim
+        await client.post("/Groups", json={"displayName": "llm-eng"})
+        resp = await client.get("/Groups", params={"filter": 'displayName eq "llm-eng"'})
+        assert resp.json()["totalResults"] == 1
+        resp = await client.get("/Groups", params={"filter": 'displayName eq "nope"'})
+        assert resp.json()["totalResults"] == 0
+
+    async def test_delete_group(self, scim: Any) -> None:
+        client, admin, _ = scim
+        resp = await client.post(
+            "/Groups", json={"displayName": "llm-gone", "members": [{"value": "u1"}]}
+        )
+        group_id = resp.json()["id"]
+        assert (await client.delete(f"/Groups/{group_id}")).status_code == 204
+        assert (await client.get(f"/Groups/{group_id}")).status_code == 404
+        assert ("member_delete", (group_id, "u1")) in admin.calls
+
 
 class TestApplyPatch:
     def test_add_members_dedupes(self) -> None:
@@ -186,3 +221,22 @@ class TestApplyPatch:
             Operations=[{"op": "Replace", "path": "active", "value": "False"}]
         )
         assert apply_patch({"active": True}, patch)["active"] is False
+
+    def test_entra_member_remove_targets_only_named(self) -> None:
+        # Entra: {op:remove, path:"members", value:[{value:id}]} must remove
+        # only the named member, not wipe the whole group.
+        resource = {"members": [{"value": "a"}, {"value": "b"}, {"value": "c"}]}
+        patch = PatchRequest(
+            Operations=[
+                {"op": "remove", "path": "members", "value": [{"value": "b"}]}
+            ]
+        )
+        result = apply_patch(resource, patch)
+        assert [m["value"] for m in result["members"]] == ["a", "c"]
+
+    def test_okta_filtered_member_remove(self) -> None:
+        resource = {"members": [{"value": "a"}, {"value": "b"}]}
+        patch = PatchRequest(
+            Operations=[{"op": "remove", "path": 'members[value eq "a"]'}]
+        )
+        assert [m["value"] for m in apply_patch(resource, patch)["members"]] == ["b"]

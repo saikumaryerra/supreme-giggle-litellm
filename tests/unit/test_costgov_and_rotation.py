@@ -112,6 +112,60 @@ class TestRotationClassification:
             == "expire_due"
         )
 
+    def test_in_progress_state_skipped(self) -> None:
+        # Idempotency: a crash mid-rotation leaves in_progress; the next run
+        # must not mint a second replacement.
+        assert classify(key(rotation_state="in_progress"), NOW, 90) == "skip"
+
+    def test_epoch_created_at_parsed(self) -> None:
+
+        epoch_key = {
+            "metadata": {"rotation": "managed"},
+            "created_at": (NOW - timedelta(days=200)).timestamp(),
+            "token": "sk-x",
+        }
+        assert classify(epoch_key, NOW.replace(tzinfo=UTC), 90) == "rotate"
+
+
+class TestBudgetCrossClear:
+    async def test_enforce_clears_downgrade_and_vice_versa(self) -> None:
+        from litellm_ext.costgov.budgets import BudgetDecision, apply_enforcement
+
+        class FakeRedis:
+            def __init__(self) -> None:
+                self.exhausted: set[str] = set()
+                self.downgrade: dict[str, str] = {}
+
+            async def sadd(self, name: str, member: str) -> None:
+                self.exhausted.add(member)
+
+            async def srem(self, name: str, member: str) -> None:
+                self.exhausted.discard(member)
+
+            async def set(self, key: str, val: str) -> None:
+                self.downgrade[key] = val
+
+            async def delete(self, key: str) -> None:
+                self.downgrade.pop(key, None)
+
+        import litellm_ext.costgov.budgets as b
+
+        fake = FakeRedis()
+        b.get_redis = lambda: fake  # type: ignore[assignment]
+
+        # First exhausted under enforce → in exhausted set.
+        await apply_enforcement(
+            BudgetDecision("t", 200, 100, 200, (), True, "enforce"), dry_run=False
+        )
+        assert "t" in fake.exhausted
+        # Config flips to downgrade while still over budget → exhausted cleared.
+        await apply_enforcement(
+            BudgetDecision("t", 200, 100, 200, (), True, "downgrade", ("gpt-4o-mini",)),
+            dry_run=False,
+        )
+        assert "t" not in fake.exhausted
+        assert b.BUDGET_DOWNGRADE_PREFIX + "t" in fake.downgrade
+
 
 class TestCloneSpec:
     def test_clone_carries_limits_and_lineage(self) -> None:

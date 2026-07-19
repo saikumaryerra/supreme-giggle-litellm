@@ -23,6 +23,7 @@ class ScimStore(Protocol):
     async def find_group_by_name(self, name: str) -> dict[str, Any] | None: ...
     async def list_groups(self) -> list[dict[str, Any]]: ...
     async def upsert_group(self, resource: dict[str, Any]) -> dict[str, Any]: ...
+    async def delete_group(self, group_id: str) -> bool: ...
 
 
 def _ensure_id(resource: dict[str, Any]) -> dict[str, Any]:
@@ -72,6 +73,9 @@ class InMemoryScimStore:
         resource = _ensure_id(dict(resource))
         self.groups[resource["id"]] = resource
         return resource
+
+    async def delete_group(self, group_id: str) -> bool:
+        return self.groups.pop(group_id, None) is not None
 
 
 class PostgresScimStore:
@@ -189,6 +193,14 @@ class PostgresScimStore:
                 datetime.now(tz=UTC),
             )
             return resource
+        finally:
+            await conn.close()
+
+    async def delete_group(self, group_id: str) -> bool:
+        conn = await self._conn()
+        try:
+            result = await conn.execute("DELETE FROM scim_groups WHERE id = $1", group_id)
+            return bool(result.endswith("1"))
         finally:
             await conn.close()
 

@@ -150,15 +150,20 @@ async def apply_enforcement(decision: BudgetDecision, dry_run: bool) -> None:
     redis = get_redis()
     if redis is None or dry_run:
         return
+    # Always clear the state that doesn't match the current action, so a
+    # config change (enforce↔downgrade) or a return under budget can't leave a
+    # stale EXHAUSTED entry that auth checks first and hard-429s on.
     if decision.exhausted and decision.action == "enforce":
         await redis.sadd(BUDGET_EXHAUSTED_SET, decision.subject)
+        await redis.delete(BUDGET_DOWNGRADE_PREFIX + decision.subject)
     elif decision.exhausted and decision.action == "downgrade":
         await redis.set(
             BUDGET_DOWNGRADE_PREFIX + decision.subject,
             ",".join(decision.downgrade_models),
         )
+        await redis.srem(BUDGET_EXHAUSTED_SET, decision.subject)
     else:
-        # Under budget again (new month / raised budget): clear enforcement.
+        # Under budget again (new month / raised budget) or alert_only: clear.
         await redis.srem(BUDGET_EXHAUSTED_SET, decision.subject)
         await redis.delete(BUDGET_DOWNGRADE_PREFIX + decision.subject)
 
@@ -167,13 +172,16 @@ async def run(dry_run: bool = False) -> list[BudgetDecision]:
     import asyncpg
 
     settings = get_settings()
-    rules, _users_default = load_rules(settings.budgets_config_path)
+    rules, users_default = load_rules(settings.budgets_config_path)
     dsn = settings.audit_db_url.replace("postgresql+asyncpg://", "postgresql://")
     conn = await asyncpg.connect(dsn)
     decisions: list[BudgetDecision] = []
     month = current_month()
     try:
-        team_spend, _user_spend = await month_to_date_spend(conn)
+        # Align the SQL month boundary with current_month()'s Python UTC so
+        # date_trunc/to_char don't drift by the DB session timezone at rollover.
+        await conn.execute("SET TIME ZONE 'UTC'")
+        team_spend, user_spend = await month_to_date_spend(conn)
         for team, rule in rules.items():
             spend = team_spend.get(team, 0.0)
             fired = await fired_thresholds(conn, team, month)
@@ -200,6 +208,30 @@ async def run(dry_run: bool = False) -> list[BudgetDecision]:
                     },
                 )
             await apply_enforcement(decision, dry_run)
+
+        # Per-user default budgets (alert-only; enforcement stays team-scoped).
+        if users_default is not None:
+            for user_id, spend in user_spend.items():
+                subject = f"user:{user_id}"
+                fired = await fired_thresholds(conn, subject, month)
+                decision = evaluate(subject, spend, users_default, fired)
+                for threshold in decision.thresholds_to_fire:
+                    if not dry_run:
+                        await mark_fired(conn, subject, month, threshold)
+                        await notify(
+                            f"LLM budget alert: user {user_id} at {decision.pct}%",
+                            f"User {user_id} spent ${decision.spend} of "
+                            f"${decision.budget} ({decision.pct}%, {threshold}%).",
+                        )
+                    emit_event(
+                        "admin.action",
+                        user_id=user_id,
+                        extra={
+                            "action": "user_budget_alert",
+                            "threshold_pct": threshold,
+                            "spend": decision.spend,
+                        },
+                    )
     finally:
         await conn.close()
     return decisions

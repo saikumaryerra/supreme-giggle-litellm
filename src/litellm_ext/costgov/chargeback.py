@@ -14,12 +14,15 @@ import argparse
 import asyncio
 import csv
 import io
+import logging
 import sys
 from datetime import UTC, datetime
 from typing import Any
 
 from litellm_ext.costgov.notify import notify
 from litellm_ext.settings import get_settings
+
+logger = logging.getLogger("litellm_ext.costgov")
 
 ROLLUPS: dict[str, str] = {
     "by_team": "team_id",
@@ -35,6 +38,9 @@ def previous_month(now: datetime | None = None) -> str:
 
 
 async def rollup(conn: Any, dimension_sql: str, month: str) -> list[dict[str, Any]]:
+    # Guard the one f-string identifier splice: dimension_sql must come from the
+    # closed ROLLUPS allow-list, never request/config input (SQL-injection guard).
+    assert dimension_sql in ROLLUPS.values(), "dimension_sql must be an allow-listed rollup"
     rows = await conn.fetch(
         f"""
         SELECT {dimension_sql} AS subject, model_requested AS model,
@@ -79,14 +85,19 @@ async def run(month: str, out_dir: str = "/tmp") -> dict[str, float]:
     conn = await asyncpg.connect(dsn)
     totals: dict[str, float] = {}
     try:
+        await conn.execute("SET TIME ZONE 'UTC'")  # match previous_month()'s UTC
         for name, dimension_sql in ROLLUPS.items():
             rows = await rollup(conn, dimension_sql, month)
             content = to_csv(rows)
             path = f"{out_dir}/chargeback-{month}-{name}.csv"
             with open(path, "w") as fh:  # noqa: ASYNC230 — batch CronJob, no event-loop pressure
                 fh.write(content)
-            if settings.reports_bucket:
-                upload(settings.reports_bucket, f"chargeback/{month}/{name}.csv", content)
+            if settings.reports_bucket and not upload(
+                settings.reports_bucket, f"chargeback/{month}/{name}.csv", content
+            ):
+                logger.error(
+                    "chargeback S3 upload failed for %s; local copy at %s", name, path
+                )
             if name == "by_team":
                 totals = {
                     str(r["subject"]): float(r["cost_usd"] or 0)

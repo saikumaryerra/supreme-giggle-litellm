@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -26,8 +27,9 @@ from typing import Any
 import httpx
 
 from litellm_ext.audit import emit_event
-from litellm_ext.costgov.notify import notify
 from litellm_ext.settings import get_settings
+
+logger = logging.getLogger("litellm_ext.keyrotation")
 
 
 class KeyAdminClient:
@@ -37,15 +39,28 @@ class KeyAdminClient:
         self._headers = {"Authorization": f"Bearer {settings.litellm_master_key}"}
 
     async def list_keys(self) -> list[dict[str, Any]]:
+        """All virtual keys, following pagination (size=100 is the server max)."""
+        keys: list[dict[str, Any]] = []
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(
-                f"{self._base}/key/list",
-                params={"return_full_object": "true", "size": 100},
-                headers=self._headers,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
-        return list(payload.get("keys") or payload.get("data") or [])
+            page = 1
+            while True:
+                resp = await client.get(
+                    f"{self._base}/key/list",
+                    params={"return_full_object": "true", "size": 100, "page": page},
+                    headers=self._headers,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+                batch = list(payload.get("keys") or payload.get("data") or [])
+                keys.extend(batch)
+                total_pages = payload.get("total_pages") or payload.get("num_pages")
+                if total_pages is not None:
+                    if page >= int(total_pages):
+                        break
+                elif len(batch) < 100:
+                    break
+                page += 1
+        return keys
 
     async def generate_key(self, spec: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=15.0) as client:
@@ -81,6 +96,9 @@ def _created_at(key: dict[str, Any]) -> datetime | None:
     raw = key.get("created_at")
     if not raw:
         return None
+    # Epoch seconds (some LiteLLM builds return created_at as a number).
+    if isinstance(raw, int | float):
+        return datetime.fromtimestamp(raw, tz=UTC)
     try:
         parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
@@ -105,7 +123,11 @@ def classify(key: dict[str, Any], now: datetime, max_age_days: int) -> str:
                     return "expire_due"
             except ValueError:
                 pass
-        return "skip"  # mid-rotation, grace not over
+        return "skip"  # replaced, grace not over
+    if state:
+        # Any other non-terminal marker (e.g. in_progress) means a rotation is
+        # mid-flight — never start a second one for the same key (idempotency).
+        return "skip"
     created = _created_at(key)
     if created is None:
         return "skip"
@@ -127,35 +149,40 @@ def clone_spec(key: dict[str, Any]) -> dict[str, Any]:
     return spec
 
 
-async def deliver(new_key: dict[str, Any], old_key: dict[str, Any], dry_run: bool) -> str:
-    """Deliver the new secret: Vault path from metadata (preferred) or notifier."""
-    vault_path = _metadata(old_key).get("vault_path")
-    if dry_run:
-        return "dry-run"
-    if vault_path:
-        try:
-            from litellm_ext.secretsmgr.providers.vault import VaultResolver
+class DeliveryError(Exception):
+    """The rotated secret could not be delivered — abort before expiring old."""
 
-            resolver = VaultResolver()
-            token = resolver._login()
-            with httpx.Client(timeout=10.0, verify=resolver._verify) as client:
-                mount, _, path = str(vault_path).partition("/")
-                resp = client.post(  # noqa: ASYNC212 — batch CronJob, sync Vault client reused
-                    f"{resolver._addr}/v1/{mount}/data/{path}",
-                    headers={"X-Vault-Token": token},
-                    json={"data": {"api_key": new_key.get("key")}},
-                )
-                resp.raise_for_status()
-            return f"vault:{vault_path}"
-        except Exception:  # noqa: BLE001 — fall through to notifier
-            pass
-    owner = old_key.get("user_id") or old_key.get("team_id") or "owner"
-    await notify(
-        "LiteLLM virtual key rotated",
-        f"A new key was issued for {owner} (alias {old_key.get('key_alias')}). "
-        "Retrieve it from the key admin — the old key expires after the grace period.",
-    )
-    return "notifier"
+
+async def deliver(new_key: dict[str, Any], old_key: dict[str, Any]) -> str:
+    """Deliver the new secret to the Vault path named in the old key's metadata.
+
+    Delivery MUST succeed before the old key is expired, otherwise the raw
+    replacement is lost (LiteLLM stores only hashes). A notifier can't carry
+    the secret safely, so a managed key without a ``vault_path`` cannot be
+    auto-rotated — raise so the caller skips it and alerts, rather than
+    minting an unrecoverable orphan.
+    """
+    vault_path = _metadata(old_key).get("vault_path")
+    if not vault_path:
+        raise DeliveryError("managed key has no metadata.vault_path for delivery")
+    if not new_key.get("key"):
+        raise DeliveryError("generated key response carried no raw key material")
+    try:
+        from litellm_ext.secretsmgr.providers.vault import VaultResolver
+
+        resolver = VaultResolver()
+        token = resolver._login()
+        with httpx.Client(timeout=10.0, verify=resolver._verify) as client:
+            mount, _, path = str(vault_path).partition("/")
+            resp = client.post(  # noqa: ASYNC212 — batch CronJob, sync Vault client reused
+                f"{resolver._addr}/v1/{mount}/data/{path}",
+                headers={"X-Vault-Token": token},
+                json={"data": {"api_key": new_key.get("key")}},
+            )
+            resp.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        raise DeliveryError(f"vault write to {vault_path} failed") from exc
+    return f"vault:{vault_path}"
 
 
 async def run(dry_run: bool = False) -> dict[str, int]:
@@ -174,14 +201,31 @@ async def run(dry_run: bool = False) -> dict[str, int]:
         if action == "rotate":
             print(f"{'DRY-RUN ' if dry_run else ''}rotate: {key.get('key_alias') or token[:12]}")
             if not dry_run:
-                new_key = await client.generate_key(clone_spec(key))
-                channel = await deliver(new_key, key, dry_run)
-                grace_end = now + timedelta(days=settings.key_rotation_grace_days)
+                # Stamp in_progress BEFORE minting so a crash mid-rotation makes
+                # the next run skip this key (classify treats any non-terminal
+                # rotation_state as skip) instead of minting another orphan.
+                in_progress_meta = dict(_metadata(key))
+                in_progress_meta["rotation_state"] = "in_progress"
+                await client.update_key(token, {"metadata": in_progress_meta})
+                try:
+                    new_key = await client.generate_key(clone_spec(key))
+                    channel = await deliver(new_key, key)
+                except DeliveryError as exc:
+                    logger.error("rotation aborted for %s: %s", key.get("key_alias"), exc)
+                    # Roll the marker back so a fixed config retries next run.
+                    await client.update_key(token, {"metadata": _metadata(key)})
+                    stats["skipped"] += 1
+                    continue
+                # Grace expiry via `duration` (the field LiteLLM's /key/update
+                # honors — `expires` is silently dropped).
                 metadata = dict(_metadata(key))
                 metadata["rotation_state"] = "replaced"
                 await client.update_key(
                     token,
-                    {"expires": grace_end.isoformat(), "metadata": metadata},
+                    {
+                        "duration": f"{settings.key_rotation_grace_days}d",
+                        "metadata": metadata,
+                    },
                 )
                 emit_event(
                     "admin.action",

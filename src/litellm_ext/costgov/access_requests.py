@@ -8,6 +8,7 @@ app, so the proxy itself gains no new routes.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -27,15 +28,31 @@ class AccessRequest(BaseModel):
 
 
 def proposed_rbac_diff(team_id: str, model: str) -> str:
+    # team_id/model are validated to a safe identifier charset before reaching
+    # here, so they can't inject extra YAML lines.
     return (
         f"```yaml\n"
         f"# proposed change to config/rbac.yaml\n"
         f"teams:\n"
-        f"  {team_id}:\n"
+        f"  {_safe_token(team_id)}:\n"
         f"    extra_models:\n"
-        f"      - {model}   # + requested\n"
+        f"      - {_safe_token(model)}   # + requested\n"
         f"```"
     )
+
+
+_TOKEN_RE = re.compile(r"[^A-Za-z0-9_./:-]")
+
+
+def _safe_token(value: str) -> str:
+    """Strip anything outside a model/team identifier charset (YAML-injection guard)."""
+    return _TOKEN_RE.sub("", value)[:200] or "unknown"
+
+
+def _fence_justification(text: str) -> str:
+    """Render free-text justification inside a fence that can't be broken out of."""
+    cleaned = text.replace("`", "'")
+    return f"Justification:\n```\n{cleaned}\n```"
 
 
 async def open_issue(title: str, body: str) -> str:
@@ -66,10 +83,11 @@ async def create_access_request(request: Request, body: AccessRequest) -> dict[s
     team_id = body.team_id or request.headers.get("x-forwarded-groups") or "unknown"
 
     issue_url = await open_issue(
-        title=f"[access-request] {team_id}: {body.model}",
+        title=f"[access-request] {_safe_token(team_id)}: {_safe_token(body.model)}",
         body=(
-            f"Requested by: `{user_id}`\nTeam: `{team_id}`\nModel: `{body.model}`\n\n"
-            f"Justification:\n> {body.justification}\n\n"
+            f"Requested by: `{_safe_token(user_id)}`\n"
+            f"Team: `{_safe_token(team_id)}`\nModel: `{_safe_token(body.model)}`\n\n"
+            f"{_fence_justification(body.justification)}\n\n"
             + proposed_rbac_diff(team_id, body.model)
         ),
     )

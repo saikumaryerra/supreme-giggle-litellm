@@ -65,21 +65,40 @@ class Reconciler:
         prefix = get_settings().scim_team_prefix
         return display_name.startswith(prefix) if prefix else True
 
+    @staticmethod
+    def _identities(resource: dict[str, Any]) -> list[str]:
+        """Every value the JWT `sub` might carry for this user.
+
+        The IdP's token `sub` may equal externalId, userName, or the SCIM id
+        depending on provider config, and auth checks the deactivation set by
+        `sub`. Add all of them so deactivation matches whichever is presented,
+        rather than silently failing to revoke.
+        """
+        return [
+            str(v)
+            for v in (
+                resource.get("externalId"),
+                resource.get("userName"),
+                resource.get("id"),
+            )
+            if v
+        ]
+
     async def user_changed(self, before: dict[str, Any] | None, after: dict[str, Any]) -> None:
         was_active = bool(before.get("active", True)) if before else True
         now_active = bool(after.get("active", True))
-        user_id = after.get("externalId") or after.get("userName") or after.get("id")
-        if not user_id:
+        identities = self._identities(after)
+        if not identities:
             return
         if was_active and not now_active:
-            await self._deactivate(str(user_id))
+            await self._deactivate(identities)
         elif not was_active and now_active:
-            await self._reactivate(str(user_id))
+            await self._reactivate(identities)
 
     async def user_deleted(self, resource: dict[str, Any]) -> None:
-        user_id = resource.get("externalId") or resource.get("userName") or resource.get("id")
-        if user_id:
-            await self._deactivate(str(user_id))
+        identities = self._identities(resource)
+        if identities:
+            await self._deactivate(identities)
 
     async def group_changed(
         self, before: dict[str, Any] | None, after: dict[str, Any]
@@ -116,24 +135,43 @@ class Reconciler:
                 },
             )
 
-    async def _deactivate(self, user_id: str) -> None:
-        client = get_redis()
-        if client is not None:
-            try:
-                await client.sadd(DEACTIVATED_USERS_SET, user_id)
-            except Exception:  # noqa: BLE001
-                logger.error("failed to add %s to deactivation set", user_id)
+    async def group_deleted(self, resource: dict[str, Any]) -> None:
+        if not self._managed_group(resource.get("displayName", "")):
+            return
+        team_id = str(resource.get("id"))
+        for member in resource.get("members", []):
+            if member.get("value"):
+                try:
+                    await self._admin.team_member_delete(team_id, member["value"])
+                except httpx.HTTPError:
+                    logger.error("failed to remove %s during group delete", member["value"])
         emit_event(
-            "admin.action", user_id=user_id, extra={"action": "scim_deactivate"}
+            "admin.action",
+            user_id="scim",
+            team_id=team_id,
+            extra={"action": "scim_group_deleted"},
         )
 
-    async def _reactivate(self, user_id: str) -> None:
+    async def _deactivate(self, user_ids: list[str]) -> None:
         client = get_redis()
-        if client is not None:
+        if client is not None and user_ids:
             try:
-                await client.srem(DEACTIVATED_USERS_SET, user_id)
+                await client.sadd(DEACTIVATED_USERS_SET, *user_ids)
             except Exception:  # noqa: BLE001
-                logger.error("failed to remove %s from deactivation set", user_id)
+                logger.error("failed to add %s to deactivation set", user_ids)
         emit_event(
-            "admin.action", user_id=user_id, extra={"action": "scim_reactivate"}
+            "admin.action", user_id=user_ids[0] if user_ids else None,
+            extra={"action": "scim_deactivate", "identities": user_ids},
+        )
+
+    async def _reactivate(self, user_ids: list[str]) -> None:
+        client = get_redis()
+        if client is not None and user_ids:
+            try:
+                await client.srem(DEACTIVATED_USERS_SET, *user_ids)
+            except Exception:  # noqa: BLE001
+                logger.error("failed to remove %s from deactivation set", user_ids)
+        emit_event(
+            "admin.action", user_id=user_ids[0] if user_ids else None,
+            extra={"action": "scim_reactivate", "identities": user_ids},
         )

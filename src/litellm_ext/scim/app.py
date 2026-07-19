@@ -30,21 +30,27 @@ from litellm_ext.settings import get_settings
 def _bearer_guard(request: Request) -> None:
     settings = get_settings()
     header = request.headers.get("authorization", "")
-    token = header.removeprefix("Bearer ").strip()
+    # RFC 6750: the scheme is case-insensitive ("Bearer"/"bearer").
+    scheme, _, value = header.partition(" ")
+    token = value.strip() if scheme.lower() == "bearer" else header.strip()
     if not settings.scim_token or not hmac.compare_digest(token, settings.scim_token):
         raise HTTPException(status_code=401, detail=error_response(401, "invalid token"))
 
 
-def _parse_username_filter(filter_expr: str | None) -> str | None:
-    # The only filter Okta needs: userName eq "value"
+def _parse_eq_filter(filter_expr: str | None, attribute: str) -> str | None:
+    """Parse `<attribute> eq "value"` (the only filter Okta/Entra send)."""
     if not filter_expr:
         return None
     parts = filter_expr.split(" ", 2)
-    if len(parts) == 3 and parts[0] == "userName" and parts[1].lower() == "eq":
+    if len(parts) == 3 and parts[0] == attribute and parts[1].lower() == "eq":
         return parts[2].strip().strip('"')
     raise HTTPException(
         status_code=400, detail=error_response(400, "unsupported filter")
     )
+
+
+def _parse_username_filter(filter_expr: str | None) -> str | None:
+    return _parse_eq_filter(filter_expr, "userName")
 
 
 def apply_patch(resource: dict[str, Any], patch: PatchRequest) -> dict[str, Any]:
@@ -67,12 +73,24 @@ def apply_patch(resource: dict[str, Any], patch: PatchRequest) -> dict[str, Any]
             else:
                 result["members"] = list(value)
         elif op == "remove" and path.startswith("members"):
-            if "[" in path:  # members[value eq "id"]
+            if "[" in path:  # Okta: members[value eq "id"]
                 target = path.split('"')[1] if '"' in path else None
                 result["members"] = [
                     m for m in result.get("members", []) if m.get("value") != target
                 ]
+            elif operation.value:  # Entra/Azure-AD: path="members", ids in value
+                to_remove = {
+                    m.get("value")
+                    for m in (operation.value or [])
+                    if isinstance(m, dict)
+                }
+                result["members"] = [
+                    m
+                    for m in result.get("members", [])
+                    if m.get("value") not in to_remove
+                ]
             else:
+                # Bare `remove members` with no value clears the group (per RFC).
                 result["members"] = []
         elif op == "replace" and path == "displayName":
             result["displayName"] = operation.value
@@ -191,7 +209,12 @@ def create_app(
 
     # --- groups ----------------------------------------------------------
     @app.get("/Groups")
-    async def list_groups() -> dict[str, Any]:
+    async def list_groups(filter: str | None = Query(default=None)) -> dict[str, Any]:
+        # Okta Push Groups queries `displayName eq "X"`.
+        display_name = _parse_eq_filter(filter, "displayName")
+        if display_name is not None:
+            group = await store.find_group_by_name(display_name)
+            return list_response([group] if group else [])
         return list_response(await store.list_groups())
 
     @app.post("/Groups", status_code=201)
@@ -216,5 +239,13 @@ def create_app(
         stored = await store.upsert_group(after)
         await reconciler.group_changed(before, stored)
         return stored
+
+    @app.delete("/Groups/{group_id}", status_code=204)
+    async def delete_group(group_id: str) -> Response:
+        group = await store.get_group(group_id)
+        if group:
+            await store.delete_group(group_id)
+            await reconciler.group_deleted(group)
+        return Response(status_code=204)
 
     return app
