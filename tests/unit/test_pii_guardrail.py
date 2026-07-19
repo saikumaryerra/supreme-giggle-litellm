@@ -224,3 +224,14 @@ class TestCircuitBreaker:
         breaker.record_success()
         breaker.record_failure()
         assert breaker.is_open is False
+
+    def test_half_open_admits_single_probe(self) -> None:
+        # After the open window, only ONE caller gets through; concurrent
+        # callers still see open until the probe records an outcome.
+        breaker = CircuitBreaker(failure_threshold=1, open_seconds=0.0)
+        breaker.record_failure()  # opens
+        assert breaker.is_open is False  # first probe admitted
+        assert breaker.is_open is True  # second caller blocked (probe in flight)
+        assert breaker.is_open is True
+        breaker.record_success()  # probe succeeded → fully closed
+        assert breaker.is_open is False

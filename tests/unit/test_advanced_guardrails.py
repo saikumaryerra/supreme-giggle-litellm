@@ -65,6 +65,22 @@ class TestSecretsDetection:
             n == "high_entropy" for n, _ in find_secrets(f"my password is {blob}")
         )
 
+    def test_realistic_short_secrets_caught(self) -> None:
+        # Regression: the old absolute-4.5 threshold was mathematically
+        # unreachable for hex (max 4.0) and short base64 keys — they passed a
+        # block-by-default guardrail. Normalized entropy must catch them.
+        for secret in (
+            "3f9a2b7c1e8d4a6b9c0f1e2d3a4b5c6d",   # 32-char hex token
+            "s3cr3tAPIkey0123456789",              # 22-char mixed API key
+        ):
+            assert any(
+                n == "high_entropy"
+                for n, _ in find_secrets(f"password is {secret}")
+            ), secret
+
+    def test_low_entropy_not_flagged(self) -> None:
+        assert find_secrets("password is aaaaaaaaaaaaaaaaaaaaaa") == []
+
     def test_mask_replaces_with_typed_placeholder(self) -> None:
         masked, counts = mask_secrets("key AKIAIOSFODNN7EXAMPLE end")
         assert "<REDACTED_SECRET:aws_key>" in masked
@@ -137,6 +153,44 @@ class TestInjectionGuardrail:
             USER, None, data, "completion"
         )
         assert result is data  # loop guard: no scan, no event
+
+    async def test_classifier_down_fail_closed_503(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm_ext.guardrails import injection_guardrail as ig
+
+        monkeypatch.setenv("LITELLM_EXT_INJECTION_MODEL", "guard-model")
+        monkeypatch.setenv("LITELLM_EXT_GUARDRAIL_FAIL_MODE", "closed")
+        reset_settings_cache()
+
+        async def down(text: str) -> None:
+            return None  # classifier unavailable
+
+        monkeypatch.setattr(ig, "classify", down)
+        with pytest.raises(HTTPException) as exc:
+            await InjectionGuardrail().async_pre_call_hook(
+                USER, None, request_data("a perfectly normal prompt"), "completion"
+            )
+        assert exc.value.status_code == 503
+
+    async def test_classifier_down_fail_open_passes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm_ext.guardrails import injection_guardrail as ig
+
+        monkeypatch.setenv("LITELLM_EXT_INJECTION_MODEL", "guard-model")
+        monkeypatch.setenv("LITELLM_EXT_GUARDRAIL_FAIL_MODE", "open")
+        reset_settings_cache()
+
+        async def down(text: str) -> None:
+            return None
+
+        monkeypatch.setattr(ig, "classify", down)
+        data = request_data("a perfectly normal prompt")
+        assert (
+            await InjectionGuardrail().async_pre_call_hook(USER, None, data, "completion")
+            is data
+        )
 
     async def test_system_prompt_not_scanned(self) -> None:
         data = {

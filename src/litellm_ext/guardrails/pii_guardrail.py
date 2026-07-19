@@ -171,10 +171,13 @@ class PiiGuardrail(CustomGuardrail):
     ) -> AsyncGenerator[Any, None]:
         """Real-time stream scanning (§7.3.5).
 
-        Accumulates chunks per choice and re-scans the tail STREAM_SCAN_WINDOW
-        chars at each flush boundary. Block policy stops iteration mid-stream;
-        mask policy on streams degrades to log_only (already-yielded text
-        cannot be retracted) — input-side masking remains the hard guarantee.
+        Re-scans a sliding tail window (STREAM_SCAN_WINDOW chars) at each flush
+        boundary. IMPORTANT: this can only *truncate* the stream on a block —
+        chunks already yielded have reached the client, and the 200/headers are
+        long sent, so a detection near the end cannot become a 400. It stops
+        iteration and records the event; input-side masking (pre_call) is the
+        real guarantee. Only the trailing window is retained in memory, not the
+        whole response.
         """
         team = _team_id(user_api_key_dict)
         policy = policies.resolve(team).pii
@@ -188,7 +191,10 @@ class PiiGuardrail(CustomGuardrail):
                 if not text:
                     continue
                 idx = getattr(choice, "index", 0) or 0
-                accumulated[idx] = accumulated.get(idx, "") + text
+                # Retain only the trailing window — enough to scan across a
+                # flush boundary without holding the entire response in memory.
+                combined = (accumulated.get(idx, "") + text)[-STREAM_SCAN_WINDOW:]
+                accumulated[idx] = combined
                 unscanned[idx] = unscanned.get(idx, 0) + len(text)
 
                 if unscanned[idx] >= STREAM_SCAN_STRIDE:

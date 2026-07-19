@@ -170,10 +170,21 @@ class InjectionGuardrail(CustomGuardrail):
             settings = get_settings()
             verdict = await classify("\n".join(s.text for s in slots))
             if verdict is None and settings.injection_model:
-                # Classifier down: fail mode decides (open → heuristics-only pass).
-                if settings.guardrail_fail_mode == FailMode.closed and not findings:
-                    pass  # heuristics already ran clean; do not hard-fail on stage 2
-                self._emit("guardrail.skipped", user_api_key_dict, data, ["classifier_unavailable"], "log_only")
+                # Classifier configured but unavailable → honor the fail mode,
+                # consistent with the PII/moderation guardrails.
+                if settings.guardrail_fail_mode == FailMode.closed:
+                    self._emit(
+                        "guardrail.blocked", user_api_key_dict, data,
+                        ["classifier_unavailable"], "block",
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail={"error": "guardrail_unavailable", "guardrail": "injection-shield"},
+                    )
+                self._emit(
+                    "guardrail.skipped", user_api_key_dict, data,
+                    ["classifier_unavailable"], "log_only",
+                )
                 return data
             if verdict is not None:
                 label, score = verdict

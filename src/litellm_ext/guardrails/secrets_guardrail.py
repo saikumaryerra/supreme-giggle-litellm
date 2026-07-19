@@ -38,7 +38,14 @@ CANDIDATE_RE = re.compile(r"[A-Za-z0-9+/_=-]{20,}")
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
 )
-ENTROPY_THRESHOLD = 4.5
+# Normalized-entropy threshold: bits-per-char divided by the max achievable
+# for the observed alphabet, so the bar is reachable for real secrets.
+# Shannon entropy is capped at log2(len), so an absolute 4.5 bar is
+# mathematically unreachable below ~23 distinct chars — a 32-char hex token
+# (max 4.0) or a 22-char base64 key would NEVER trip it. Normalizing by
+# log2(alphabet_size) instead measures "how random for its alphabet."
+ENTROPY_RATIO_THRESHOLD = 0.80
+MIN_ENTROPY_BITS = 3.0  # absolute floor so trivially short blobs don't trip
 KEYWORD_PROXIMITY = 80  # chars around a candidate searched for keywords
 
 
@@ -48,6 +55,18 @@ def shannon_entropy(text: str) -> float:
     counts = Counter(text)
     length = len(text)
     return -sum((n / length) * math.log2(n / length) for n in counts.values())
+
+
+def is_high_entropy(candidate: str) -> bool:
+    """True when a string is random enough for its alphabet to look secret-y."""
+    bits = shannon_entropy(candidate)
+    if bits < MIN_ENTROPY_BITS:
+        return False
+    alphabet = len(set(candidate))
+    if alphabet < 2:
+        return False
+    max_bits = math.log2(alphabet)
+    return (bits / max_bits) >= ENTROPY_RATIO_THRESHOLD
 
 
 def find_secrets(text: str) -> list[tuple[str, re.Match[str]]]:
@@ -66,7 +85,7 @@ def find_secrets(text: str) -> list[tuple[str, re.Match[str]]]:
         candidate = match.group()
         if already_found(match.span()) or UUID_RE.match(candidate):
             continue
-        if shannon_entropy(candidate) <= ENTROPY_THRESHOLD:
+        if not is_high_entropy(candidate):
             continue
         window_start = max(0, match.start() - KEYWORD_PROXIMITY)
         window = text[window_start : match.end() + KEYWORD_PROXIMITY]
