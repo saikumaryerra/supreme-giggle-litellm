@@ -35,13 +35,28 @@ class RedactionFilter(logging.Filter):
         super().__init__()
         self._values = [v for v in values if len(v) >= 4]
 
+    def _scrub(self, text: str) -> str:
+        for value in self._values:
+            if value in text:
+                text = text.replace(value, "***REDACTED***")
+        return text
+
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
-        for value in self._values:
-            if value in message:
-                record.msg = message.replace(value, "***REDACTED***")
-                record.args = ()
-                message = record.getMessage()
+        if any(v in message for v in self._values):
+            record.msg = self._scrub(message)
+            record.args = ()
+        # Also scrub exception tracebacks, where a secret can surface via an
+        # httpx error repr, KeyError(value), or a formatted stack.
+        if record.exc_info:
+            import logging as _logging
+
+            record.exc_text = self._scrub(
+                _logging.Formatter().formatException(record.exc_info)
+            )
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = self._scrub(record.exc_text)
         return True
 
 

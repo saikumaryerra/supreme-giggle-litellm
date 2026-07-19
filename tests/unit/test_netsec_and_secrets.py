@@ -148,6 +148,21 @@ class TestSecretRefs:
         finally:
             caplog.handler.removeFilter(filt)
 
+    def test_redaction_scrubs_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        filt = resolver.RedactionFilter(["sk-tracebacksecret"])
+        caplog.handler.addFilter(filt)
+        try:
+            with caplog.at_level(logging.ERROR):
+                try:
+                    raise ValueError("boom sk-tracebacksecret in message")
+                except ValueError:
+                    logging.getLogger("x").exception("failed")
+            assert "sk-tracebacksecret" not in caplog.text
+        finally:
+            caplog.handler.removeFilter(filt)
+
     def test_export_mode_output(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

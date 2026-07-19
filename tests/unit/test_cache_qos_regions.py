@@ -45,10 +45,22 @@ class TestCacheSafetyRules:
     def test_tool_calls_not_cached(self) -> None:
         assert should_cache(data(tools=[{"type": "function"}]), USER)[1] == "tools_present"
 
-    def test_namespace_includes_team(self) -> None:
+    def test_namespace_isolates_tenants(self) -> None:
         # Tenant isolation is namespace-level (hard rule §13).
-        assert cache_namespace("team-a", "gpt-4o") != cache_namespace("team-b", "gpt-4o")
-        assert "team-a" in cache_namespace("team-a", "gpt-4o")
+        assert cache_namespace("team:a", "gpt-4o") != cache_namespace("team:b", "gpt-4o")
+        assert "team:a" in cache_namespace("team:a", "gpt-4o")
+
+    def test_teamless_keys_do_not_share_namespace(self) -> None:
+        from types import SimpleNamespace
+
+        from litellm_ext.cache.semantic_cache import tenant_key
+
+        a = SimpleNamespace(team_id=None, user_id="svc-a", api_key="k1")
+        b = SimpleNamespace(team_id=None, user_id="svc-b", api_key="k2")
+        assert tenant_key(a) != tenant_key(b)  # distinct teamless service keys
+        anon1 = SimpleNamespace(team_id=None, user_id=None, api_key="k1")
+        anon2 = SimpleNamespace(team_id=None, user_id=None, api_key="k2")
+        assert tenant_key(anon1) != tenant_key(anon2)
 
     def test_normalize_strips_whitespace_and_user(self) -> None:
         first = normalize_prompt(data(messages=[{"role": "user", "content": "a   b\n c"}], user="x"))

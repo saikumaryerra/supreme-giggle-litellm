@@ -21,20 +21,26 @@ def pin_models_to_regions(models: list[str], allowed_regions: list[str]) -> list
     if not allowed_regions:
         return models
 
-    known = _known_regions(allowed_regions, models)
+    # Residency is a security control, so ambiguity resolves toward denying,
+    # never leaking: a model whose suffix looks like a *disallowed* region is
+    # dropped (over-restriction is a visible config bug; keeping a cross-region
+    # alias would be a silent breach). Caveat: a legitimate model whose name
+    # coincidentally ends in a region token (`-in`, `-ca`) is treated as a
+    # region alias — use a non-colliding naming convention for such models, or
+    # pass the deployment's real region set once it's threaded through here.
+    known = set(allowed_regions) | KNOWN_REGION_CODES
+    allowed = set(allowed_regions)
     pinned: list[str] = []
     for model in models:
         if model == "*":
             continue
         suffix = model.rsplit("-", 1)[-1] if "-" in model else None
         if suffix in known:  # already region-qualified
-            if suffix in allowed_regions:
+            if suffix in allowed:
                 pinned.append(model)
-            continue
+            continue  # disallowed region → dropped (no access)
         pinned.extend(f"{model}-{region}" for region in allowed_regions)
     return pinned
 
 
-def _known_regions(allowed: list[str], models: list[str]) -> set[str]:
-    # Regions we can recognize as suffixes: the allowed set plus common codes.
-    return set(allowed) | {"eu", "us", "ap", "uk", "ca", "au", "in", "jp"}
+KNOWN_REGION_CODES = {"eu", "us", "ap", "uk", "ca", "au", "in", "jp"}

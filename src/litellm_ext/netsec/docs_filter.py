@@ -73,12 +73,11 @@ class DocsFilterMiddleware:
         settings = get_settings()
         path = scope.get("path", "")
 
-        if settings.route_lockdown and is_management_route(path):
-            role = _resolved_role(scope)
-            if role != "proxy_admin":
-                await _send_json(send, 404, {"error": "not_found"})
-                return
-
+        # NOTE: management-route lockdown is enforced by RBAC allowed_routes in
+        # the auth layer (which has the resolved role), NOT here. An outer ASGI
+        # middleware runs before LiteLLM populates the resolved UserAPIKeyAuth,
+        # so a role check at this point saw None and 404'd real admins. The
+        # openapi filter below is pure response rewriting and is safe here.
         if settings.docs_filtered and path == "/openapi.json":
             await self._filtered_openapi(scope, receive, send)
             return
@@ -104,16 +103,6 @@ class DocsFilterMiddleware:
             await _send_json(send, 500, {"error": "openapi_filter_failed"})
             return
         await _send_json(send, int(status_holder.get("status", 200)), payload)
-
-
-def _resolved_role(scope: dict[str, Any]) -> str | None:
-    # LiteLLM stores the resolved UserAPIKeyAuth on request state when
-    # available; fall back to None (locked down) otherwise.
-    state = scope.get("state") or {}
-    auth = state.get("user_api_key_auth") if isinstance(state, dict) else None
-    return getattr(auth, "user_role", None) or (
-        auth.get("user_role") if isinstance(auth, dict) else None
-    )
 
 
 async def _send_json(send: Any, status: int, payload: dict[str, Any]) -> None:

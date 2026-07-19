@@ -80,11 +80,27 @@ def build_event(event_type: str, **fields: Any) -> dict[str, Any]:
     return event
 
 
+def _stdout_view(event: dict[str, Any]) -> dict[str, Any]:
+    """Event copy for the stdout/SIEM sink with raw bodies stripped.
+
+    Prompt/response bodies (only present under redacted/full policies) go to
+    the access-controlled, INSERT-only audit DB — never to stdout, which the
+    k8s log pipeline ships far more widely. The sha256 fields stay for
+    correlation.
+    """
+    if event.get("prompt_body") is None and event.get("response_body") is None:
+        return event
+    redacted = dict(event)
+    redacted["prompt_body"] = None
+    redacted["response_body"] = None
+    return redacted
+
+
 def enqueue(event_type: str, **fields: Any) -> None:
     """Queue an audit event. Never raises; never blocks."""
     try:
         event = build_event(event_type, **fields)
-        _stdout_logger.info(json.dumps(event, default=_json_default))
+        _stdout_logger.info(json.dumps(_stdout_view(event), default=_json_default))
 
         settings = get_settings()
         if not settings.audit_db_url:

@@ -46,9 +46,24 @@ def normalize_prompt(data: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def cache_namespace(team_id: str | None, model: str) -> str:
-    """Team-scoped namespace — responses NEVER cross tenants (hard rule §13)."""
-    return f"ext-semcache:{team_id or 'no-team'}:{model}"
+def tenant_key(user_api_key_dict: Any) -> str:
+    """The tenant a cached response belongs to.
+
+    Falls back to the per-user id (then the hashed api_key) when there's no
+    team, so two distinct teamless service keys never share a cache namespace.
+    """
+    team_id = getattr(user_api_key_dict, "team_id", None)
+    if team_id:
+        return f"team:{team_id}"
+    user_id = getattr(user_api_key_dict, "user_id", None)
+    if user_id:
+        return f"user:{user_id}"
+    return f"key:{getattr(user_api_key_dict, 'api_key', 'anon')}"
+
+
+def cache_namespace(tenant: str, model: str) -> str:
+    """Tenant-scoped namespace — responses NEVER cross tenants (hard rule §13)."""
+    return f"ext-semcache:{tenant}:{model}"
 
 
 def should_cache(data: dict[str, Any], user_api_key_dict: Any) -> tuple[bool, str]:
@@ -94,7 +109,7 @@ class SemanticCacheHooks:
 
     async def pre_call(self, user_api_key_dict: Any, data: dict[str, Any]) -> Any | None:
         cacheable, _reason = should_cache(data, user_api_key_dict)
-        team_id = getattr(user_api_key_dict, "team_id", None)
+        tenant = tenant_key(user_api_key_dict)
         if not cacheable:
             return None
         from litellm_ext.redis_client import get_redis
@@ -103,7 +118,7 @@ class SemanticCacheHooks:
         if redis is None:
             return None
         settings = get_settings()
-        namespace = cache_namespace(team_id, str(data.get("model")))
+        namespace = cache_namespace(tenant, str(data.get("model")))
         prompt = normalize_prompt(data)
         try:
             embedding = await self._embed(prompt)
@@ -112,10 +127,10 @@ class SemanticCacheHooks:
             logger.exception("semantic cache lookup failed")
             return None
         if hit is None:
-            ext_cache_misses_total.labels(team_id=team_id or "no-team").inc()
+            ext_cache_misses_total.labels(team_id=tenant).inc()
             data.setdefault("metadata", {})["ext_cache_prompt"] = prompt
             return None
-        ext_cache_hits_total.labels(team_id=team_id or "no-team").inc()
+        ext_cache_hits_total.labels(team_id=tenant).inc()
         hit["_hidden_params"] = {"additional_headers": {"x-ext-cache": "hit"}}
         return hit
 
@@ -131,8 +146,8 @@ class SemanticCacheHooks:
         if redis is None:
             return
         settings = get_settings()
-        team_id = getattr(user_api_key_dict, "team_id", None)
-        namespace = cache_namespace(team_id, str(data.get("model")))
+        tenant = tenant_key(user_api_key_dict)
+        namespace = cache_namespace(tenant, str(data.get("model")))
         prompt = (data.get("metadata") or {}).get("ext_cache_prompt") or normalize_prompt(data)
         try:
             embedding = await self._embed(prompt)

@@ -30,18 +30,21 @@ BUCKET_KEY = "ext:qos:bucket:{tier}"
 POLL_INTERVAL_S = 0.05
 
 # Atomic token-bucket take: refill by elapsed-time x rate (capped at burst),
-# then take one token if available (or unconditionally for interactive).
+# then take one token if available (or unconditionally for interactive). The
+# clock is Redis's own TIME (shared across replicas) rather than each pod's
+# wall clock, so clock skew can't drive a negative refill / spurious throttle.
 TOKEN_BUCKET_LUA = """
 local key = KEYS[1]
 local rate = tonumber(ARGV[1])
 local burst = tonumber(ARGV[2])
-local now = tonumber(ARGV[3])
-local force = tonumber(ARGV[4])
+local force = tonumber(ARGV[3])
+local t = redis.call('TIME')
+local now = tonumber(t[1]) + tonumber(t[2]) / 1000000
 local data = redis.call('HMGET', key, 'tokens', 'ts')
 local tokens = tonumber(data[1])
 local ts = tonumber(data[2])
 if tokens == nil then tokens = burst ts = now end
-tokens = math.min(burst, tokens + (now - ts) * rate)
+tokens = math.min(burst, tokens + math.max(0, now - ts) * rate)
 local granted = 0
 if tokens >= 1 or force == 1 then
   tokens = tokens - 1
@@ -126,7 +129,6 @@ class QosPriorityGuardrail(CustomGuardrail):
                 BUCKET_KEY.format(tier=tier),
                 rate,
                 burst,
-                time.time(),
                 force,
             )
         except Exception:
@@ -138,7 +140,6 @@ class QosPriorityGuardrail(CustomGuardrail):
                 BUCKET_KEY.format(tier=tier),
                 rate,
                 burst,
-                time.time(),
                 force,
             )
         return bool(int(result))
