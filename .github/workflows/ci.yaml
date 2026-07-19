@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  license-gate:
+    name: enterprise-license grep gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if enterprise code is referenced
+        run: |
+          if grep -rnE 'litellm_enterprise|from +enterprise|import +enterprise' src/; then
+            echo "::error::src/ references LiteLLM enterprise code (commercial license) — forbidden by design (§1.2)"
+            exit 1
+          fi
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install '.[dev]'
+      - run: ruff check src tests
+      - run: mypy
+
+  unit-and-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Sync litellm pin from Dockerfile (single source of truth)
+        run: python scripts/sync_litellm_pin.py --check
+      - run: pip install -e '.[test]'
+      - run: pytest tests/unit tests/contract --tb=short
+      - name: Coverage gate
+        run: |
+          pip install pytest-cov
+          pytest tests/unit tests/contract --cov=litellm_ext --cov-fail-under=85 -q
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [license-gate, lint, unit-and-contract]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build wheel
+        run: pip install build && python -m build --wheel
+      - name: Build image
+        run: |
+          mkdir -p dist && docker build -f docker/Dockerfile -t litellm-ext:ci .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run docker-compose e2e suite
+        run: |
+          pip install build && python -m build --wheel
+          docker compose -f tests/integration/docker-compose.test.yaml up -d --build
+          pip install '.[test]'
+          pytest tests/integration -m integration --tb=short
+          docker compose -f tests/integration/docker-compose.test.yaml down -v

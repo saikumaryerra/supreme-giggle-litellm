@@ -1,0 +1,10 @@
+Proprietary — Internal Use Only
+
+Copyright (c) 2026. All rights reserved.
+
+This software is an internal, proprietary extension layer for the LiteLLM
+proxy. It is not licensed for redistribution. It intentionally contains no
+code from, and takes no dependency on, LiteLLM's `enterprise/` directory or
+the `litellm_enterprise` package (which are commercially licensed by
+BerriAI). All enterprise-equivalent functionality here is a clean-room
+implementation against LiteLLM's public OSS extension points.
