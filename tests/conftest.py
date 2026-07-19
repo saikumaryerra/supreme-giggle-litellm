@@ -22,9 +22,9 @@ def base_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LITELLM_EXT_REDIS_HOST", raising=False)
     reset_settings_cache()
 
+    from litellm_ext import redis_client
     from litellm_ext.audit import sink
     from litellm_ext.auth import jwks, rbac
-    from litellm_ext import redis_client
 
     sink.reset_for_tests()
     jwks.reset_jwks_cache()

@@ -65,7 +65,7 @@ class JwksCache:
                 # grace; an unknown kid fails closed.
                 if kid in self._keys:
                     return self._keys[kid]
-                raise JwksError(f"JWKS refresh failed and kid is unknown") from exc
+                raise JwksError("JWKS refresh failed and kid is unknown") from exc
 
         if kid not in self._keys:
             raise JwksError("unknown kid after refetch")

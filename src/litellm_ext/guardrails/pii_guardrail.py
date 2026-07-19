@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import time
 from collections import Counter
-from typing import Any, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import HTTPException
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
 from litellm_ext.audit import emit_event
@@ -54,9 +54,9 @@ class PiiGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: Any,
         cache: Any,
-        data: dict,
+        data: dict[str, Any],
         call_type: str,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         messages = data.get("messages")
         if not isinstance(messages, list):
             return data
@@ -97,7 +97,7 @@ class PiiGuardrail(CustomGuardrail):
 
         if policy.action == PiiAction.mask:
             client = get_presidio_client()
-            for slot, slot_results in zip(slots, results):
+            for slot, slot_results in zip(slots, results, strict=True):
                 if not slot_results:
                     continue
                 try:
@@ -114,7 +114,7 @@ class PiiGuardrail(CustomGuardrail):
         return data
 
     async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: Any, response: Any
+        self, data: dict[str, Any], user_api_key_dict: Any, response: Any
     ) -> Any:
         team = _team_id(user_api_key_dict)
         policy = policies.resolve(team).pii
@@ -148,7 +148,7 @@ class PiiGuardrail(CustomGuardrail):
             )
         if policy.response_action == PiiAction.mask:
             client = get_presidio_client()
-            for (choice_idx, text), slot_results in zip(texts, results):
+            for (choice_idx, text), slot_results in zip(texts, results, strict=True):
                 if not slot_results:
                     continue
                 try:
@@ -167,7 +167,7 @@ class PiiGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: Any,
         response: Any,
-        request_data: dict,
+        request_data: dict[str, Any],
     ) -> AsyncGenerator[Any, None]:
         """Real-time stream scanning (§7.3.5).
 
@@ -205,7 +205,7 @@ class PiiGuardrail(CustomGuardrail):
                 )
 
     async def _scan_stream_tail(
-        self, text: str, policy: policies.PiiPolicy, user_api_key_dict: Any, data: dict
+        self, text: str, policy: policies.PiiPolicy, user_api_key_dict: Any, data: dict[str, Any]
     ) -> None:
         window = text[-STREAM_SCAN_WINDOW:]
         try:
@@ -232,8 +232,8 @@ class PiiGuardrail(CustomGuardrail):
         self._audit("guardrail.detected", user_api_key_dict, data, counts, "log_only")
 
     def _handle_unavailable(
-        self, user_api_key_dict: Any, data: dict, stage: str
-    ) -> dict | None:
+        self, user_api_key_dict: Any, data: dict[str, Any], stage: str
+    ) -> dict[str, Any] | None:
         settings = get_settings()
         if settings.guardrail_fail_mode == FailMode.closed:
             emit_event(
@@ -262,7 +262,7 @@ class PiiGuardrail(CustomGuardrail):
         self,
         event_type: str,
         user_api_key_dict: Any,
-        data: dict,
+        data: dict[str, Any],
         entity_counts: dict[str, int],
         action: str,
     ) -> None:

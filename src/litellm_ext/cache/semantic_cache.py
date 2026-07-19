@@ -168,7 +168,7 @@ class SemanticCacheHooks:
                 if not raw or "embedding" not in raw:
                     continue
                 stored = json.loads(raw["embedding"])
-                dot = sum(a * b for a, b in zip(embedding, stored))
+                dot = sum(a * b for a, b in zip(embedding, stored, strict=False))
                 norm = math.sqrt(sum(a * a for a in embedding)) * math.sqrt(
                     sum(b * b for b in stored)
                 )

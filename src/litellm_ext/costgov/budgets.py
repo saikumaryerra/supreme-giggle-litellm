@@ -14,7 +14,7 @@ import argparse
 import asyncio
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import yaml
@@ -96,7 +96,7 @@ def evaluate(
 
 
 def current_month() -> str:
-    return datetime.now(tz=timezone.utc).strftime("%Y-%m")
+    return datetime.now(tz=UTC).strftime("%Y-%m")
 
 
 async def month_to_date_spend(conn: Any) -> tuple[dict[str, float], dict[str, float]]:

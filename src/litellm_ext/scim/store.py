@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 
@@ -130,7 +130,7 @@ class PostgresScimStore:
                 _primary_email(resource),
                 bool(resource.get("active", True)),
                 json.dumps(resource),
-                datetime.now(tz=timezone.utc),
+                datetime.now(tz=UTC),
             )
             return resource
         finally:
@@ -140,7 +140,7 @@ class PostgresScimStore:
         conn = await self._conn()
         try:
             result = await conn.execute("DELETE FROM scim_users WHERE id = $1", user_id)
-            return result.endswith("1")
+            return bool(result.endswith("1"))
         finally:
             await conn.close()
 
@@ -186,7 +186,7 @@ class PostgresScimStore:
                 resource.get("displayName", ""),
                 json.dumps(resource.get("members", [])),
                 json.dumps(resource),
-                datetime.now(tz=timezone.utc),
+                datetime.now(tz=UTC),
             )
             return resource
         finally:

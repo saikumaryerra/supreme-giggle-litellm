@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -129,7 +129,7 @@ def _response() -> Any:
 class TestAuditLogger:
     async def test_success_event_row(self, capsys: pytest.CaptureFixture[str]) -> None:
         logger = AuditLogger()
-        start = datetime.now(tz=timezone.utc)
+        start = datetime.now(tz=UTC)
         await logger.async_log_success_event(
             _kwargs(), _response(), start, start + timedelta(milliseconds=250)
         )
@@ -148,7 +148,7 @@ class TestAuditLogger:
 
     async def test_failure_event_row(self, capsys: pytest.CaptureFixture[str]) -> None:
         logger = AuditLogger()
-        start = datetime.now(tz=timezone.utc)
+        start = datetime.now(tz=UTC)
         error = ValueError("boom")
         await logger.async_log_failure_event(
             _kwargs(exception=error), None, start, start + timedelta(seconds=1)

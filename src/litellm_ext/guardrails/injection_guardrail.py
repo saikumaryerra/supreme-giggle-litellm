@@ -23,7 +23,6 @@ import re
 from typing import Any
 
 from fastapi import HTTPException
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
 from litellm_ext.audit import emit_event
@@ -131,7 +130,7 @@ async def classify(text: str) -> tuple[str, float] | None:
         return None
 
 
-def is_internal_request(data: dict) -> bool:
+def is_internal_request(data: dict[str, Any]) -> bool:
     metadata = data.get("metadata") or {}
     headers = (data.get("proxy_server_request") or {}).get("headers") or {}
     return INTERNAL_MARKER in metadata or INTERNAL_MARKER in headers
@@ -142,9 +141,9 @@ class InjectionGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: Any,
         cache: Any,
-        data: dict,
+        data: dict[str, Any],
         call_type: str,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         if is_internal_request(data):
             return data
         messages = data.get("messages")
@@ -203,7 +202,7 @@ class InjectionGuardrail(CustomGuardrail):
         self,
         event_type: str,
         user_api_key_dict: Any,
-        data: dict,
+        data: dict[str, Any],
         findings: list[str],
         action: str,
         score: float = 0.0,

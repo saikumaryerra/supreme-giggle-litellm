@@ -21,7 +21,6 @@ import time
 from typing import Any
 
 from fastapi import HTTPException
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
 from litellm_ext.metrics import ext_qos_rejections_total, ext_qos_wait_seconds
@@ -76,9 +75,9 @@ class QosPriorityGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: Any,
         cache: Any,
-        data: dict,
+        data: dict[str, Any],
         call_type: str,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         settings = get_settings()
         if not settings.qos_enabled:
             return data

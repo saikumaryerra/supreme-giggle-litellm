@@ -22,7 +22,7 @@ import json
 import logging
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from litellm_ext.audit.models import AUDIT_EVENT_COLUMNS
@@ -32,11 +32,11 @@ from litellm_ext.settings import get_settings
 BATCH_SIZE = 100
 FLUSH_INTERVAL_S = 0.5
 
-class _LiveStdoutHandler(logging.StreamHandler):
+class _LiveStdoutHandler(logging.StreamHandler):  # type: ignore[type-arg]
     """Resolve sys.stdout at emit time (container restarts, test capture)."""
 
     @property
-    def stream(self) -> Any:  # type: ignore[override]
+    def stream(self) -> Any:
         return sys.stdout
 
     @stream.setter
@@ -66,7 +66,7 @@ def build_event(event_type: str, **fields: Any) -> dict[str, Any]:
     event: dict[str, Any] = {col: None for col in AUDIT_EVENT_COLUMNS}
     event.update(
         event_id=str(uuid.uuid4()),
-        ts=datetime.now(tz=timezone.utc),
+        ts=datetime.now(tz=UTC),
         event_type=event_type,
         status=fields.pop("status", "success"),
     )
@@ -138,7 +138,7 @@ async def _writer_loop() -> None:
             try:
                 event = await asyncio.wait_for(_queue.get(), timeout=timeout)
                 batch.append(event)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             if len(batch) >= BATCH_SIZE or (batch and _queue.empty()):
                 await _flush(batch)

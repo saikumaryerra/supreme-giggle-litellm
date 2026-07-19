@@ -17,7 +17,6 @@ from collections import Counter
 from typing import Any
 
 from fastapi import HTTPException
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
 from litellm_ext.audit import emit_event
@@ -95,9 +94,9 @@ class SecretsGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: Any,
         cache: Any,
-        data: dict,
+        data: dict[str, Any],
         call_type: str,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         messages = data.get("messages")
         if not isinstance(messages, list):
             return data

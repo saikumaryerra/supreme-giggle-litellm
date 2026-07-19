@@ -20,7 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -83,7 +83,7 @@ def _created_at(key: dict[str, Any]) -> datetime | None:
         return None
     try:
         parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     except ValueError:
         return None
 
@@ -100,7 +100,7 @@ def classify(key: dict[str, Any], now: datetime, max_age_days: int) -> str:
             try:
                 exp_dt = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
                 if exp_dt.tzinfo is None:
-                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                    exp_dt = exp_dt.replace(tzinfo=UTC)
                 if exp_dt <= now:
                     return "expire_due"
             except ValueError:
@@ -123,7 +123,7 @@ def clone_spec(key: dict[str, Any]) -> dict[str, Any]:
         if key.get(field) is not None:
             spec[field] = key[field]
     if spec.get("key_alias"):
-        spec["key_alias"] = f"{spec['key_alias']}-r{int(datetime.now(tz=timezone.utc).timestamp())}"
+        spec["key_alias"] = f"{spec['key_alias']}-r{int(datetime.now(tz=UTC).timestamp())}"
     return spec
 
 
@@ -140,7 +140,7 @@ async def deliver(new_key: dict[str, Any], old_key: dict[str, Any], dry_run: boo
             token = resolver._login()
             with httpx.Client(timeout=10.0, verify=resolver._verify) as client:
                 mount, _, path = str(vault_path).partition("/")
-                resp = client.post(
+                resp = client.post(  # noqa: ASYNC212 — batch CronJob, sync Vault client reused
                     f"{resolver._addr}/v1/{mount}/data/{path}",
                     headers={"X-Vault-Token": token},
                     json={"data": {"api_key": new_key.get("key")}},
@@ -161,7 +161,7 @@ async def deliver(new_key: dict[str, Any], old_key: dict[str, Any], dry_run: boo
 async def run(dry_run: bool = False) -> dict[str, int]:
     settings = get_settings()
     client = KeyAdminClient()
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     stats = {"rotated": 0, "expired": 0, "skipped": 0}
 
     for key in await client.list_keys():

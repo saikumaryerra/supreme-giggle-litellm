@@ -54,7 +54,7 @@ class PresidioClient:
         try:
             resp = await self._client.post(f"{self._analyzer_url}/analyze", json=payload)
             resp.raise_for_status()
-        except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+        except (TimeoutError, httpx.HTTPError) as exc:
             presidio_circuit.record_failure()
             raise PresidioUnavailable(str(exc)) from exc
         presidio_circuit.record_success()
@@ -95,7 +95,7 @@ class PresidioClient:
                 f"{self._anonymizer_url}/anonymize", json=payload
             )
             resp.raise_for_status()
-        except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+        except (TimeoutError, httpx.HTTPError) as exc:
             presidio_circuit.record_failure()
             raise PresidioUnavailable(str(exc)) from exc
         presidio_circuit.record_success()

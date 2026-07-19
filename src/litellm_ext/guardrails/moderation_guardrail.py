@@ -12,7 +12,6 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
 from litellm_ext.audit import emit_event
@@ -66,9 +65,9 @@ class ModerationGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: Any,
         cache: Any,
-        data: dict,
+        data: dict[str, Any],
         call_type: str,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         if is_internal_request(data):
             return data
         team_policy = policies.resolve(getattr(user_api_key_dict, "team_id", None))
@@ -84,7 +83,7 @@ class ModerationGuardrail(CustomGuardrail):
         return data
 
     async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: Any, response: Any
+        self, data: dict[str, Any], user_api_key_dict: Any, response: Any
     ) -> Any:
         team_policy = policies.resolve(getattr(user_api_key_dict, "team_id", None))
         if not team_policy.moderation_enabled:
@@ -101,7 +100,7 @@ class ModerationGuardrail(CustomGuardrail):
         text: str,
         team_policy: policies.TeamPolicies,
         user_api_key_dict: Any,
-        data: dict,
+        data: dict[str, Any],
         stage: str,
     ) -> None:
         scores = await moderate(text)

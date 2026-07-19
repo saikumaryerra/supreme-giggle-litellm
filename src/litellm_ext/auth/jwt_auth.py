@@ -23,7 +23,7 @@ Algorithm (spec §5.2, extended by F5/F6/F9/F12/F13):
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import jwt as pyjwt
@@ -78,7 +78,7 @@ def _deny(
 
 async def user_api_key_auth(request: Request, api_key: str) -> Any:
     """LiteLLM custom_auth entrypoint. Raises on failure (fail closed)."""
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
     settings = get_settings()
 
@@ -175,14 +175,14 @@ async def user_api_key_auth(request: Request, api_key: str) -> Any:
         api_key=hash_token(token),
         user_id=claims.sub,
         user_email=claims.email,
-        user_role=resolved.litellm_role,
+        user_role=LitellmUserRoles(resolved.litellm_role),
         team_id=claims.team,
         models=models,
         tpm_limit=resolved.tpm_limit,
         rpm_limit=resolved.rpm_limit,
         max_budget=resolved.max_budget,
         allowed_routes=resolved.allowed_routes,
-        expires=datetime.fromtimestamp(claims.exp, tz=timezone.utc),
+        expires=datetime.fromtimestamp(claims.exp, tz=UTC),
         metadata={
             "auth_method": "jwt",
             "idp_roles": claims.roles,
@@ -197,6 +197,6 @@ async def user_api_key_auth(request: Request, api_key: str) -> Any:
 
 
 def _seconds_to_next_month() -> int:
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     year, month = (now.year + 1, 1) if now.month == 12 else (now.year, now.month + 1)
-    return max(0, int((datetime(year, month, 1, tzinfo=timezone.utc) - now).total_seconds()))
+    return max(0, int((datetime(year, month, 1, tzinfo=UTC) - now).total_seconds()))

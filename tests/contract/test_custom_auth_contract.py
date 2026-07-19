@@ -7,7 +7,7 @@ reshapes anything litellm-ext depends on fails here — in CI, not production.
 from __future__ import annotations
 
 import inspect
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -32,7 +32,7 @@ class TestUserApiKeyAuth:
             rpm_limit=10,
             max_budget=100.0,
             allowed_routes=["/v1/chat/completions"],
-            expires=datetime.now(tz=timezone.utc),
+            expires=datetime.now(tz=UTC),
             metadata={"auth_method": "jwt", "idp_roles": ["r"], "priority": "standard"},
         )
         # Fields we read downstream must round-trip.

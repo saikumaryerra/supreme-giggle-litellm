@@ -7,7 +7,7 @@ Settings objects are immutable; tests construct their own instances.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, Any
 
@@ -19,20 +19,20 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 StrList = Annotated[list[str], NoDecode]
 
 
-class BodyPolicy(str, Enum):
+class BodyPolicy(StrEnum):
     none = "none"
     hash = "hash"
     redacted = "redacted"
     full = "full"
 
 
-class PiiAction(str, Enum):
+class PiiAction(StrEnum):
     mask = "mask"
     block = "block"
     log_only = "log_only"
 
 
-class FailMode(str, Enum):
+class FailMode(StrEnum):
     closed = "closed"
     open = "open"
 

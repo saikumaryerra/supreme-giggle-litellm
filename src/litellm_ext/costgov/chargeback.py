@@ -15,7 +15,7 @@ import asyncio
 import csv
 import io
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from litellm_ext.costgov.notify import notify
@@ -29,7 +29,7 @@ ROLLUPS: dict[str, str] = {
 
 
 def previous_month(now: datetime | None = None) -> str:
-    now = now or datetime.now(tz=timezone.utc)
+    now = now or datetime.now(tz=UTC)
     year, month = (now.year - 1, 12) if now.month == 1 else (now.year, now.month - 1)
     return f"{year:04d}-{month:02d}"
 
@@ -83,7 +83,7 @@ async def run(month: str, out_dir: str = "/tmp") -> dict[str, float]:
             rows = await rollup(conn, dimension_sql, month)
             content = to_csv(rows)
             path = f"{out_dir}/chargeback-{month}-{name}.csv"
-            with open(path, "w") as fh:
+            with open(path, "w") as fh:  # noqa: ASYNC230 — batch CronJob, no event-loop pressure
                 fh.write(content)
             if settings.reports_bucket:
                 upload(settings.reports_bucket, f"chargeback/{month}/{name}.csv", content)

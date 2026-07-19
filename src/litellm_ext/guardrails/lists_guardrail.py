@@ -17,7 +17,6 @@ import time
 from typing import Any
 
 from fastapi import HTTPException
-
 from litellm.integrations.custom_guardrail import CustomGuardrail
 
 from litellm_ext.audit import emit_event
@@ -135,9 +134,9 @@ class ListsGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: Any,
         cache: Any,
-        data: dict,
+        data: dict[str, Any],
         call_type: str,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         # Blocked users first: cheapest check, hard 403.
         for candidate in {
             getattr(user_api_key_dict, "user_id", None),

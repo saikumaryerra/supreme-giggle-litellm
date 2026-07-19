@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import pathlib
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from litellm_ext.costgov.budgets import BudgetRule, evaluate, load_rules
 from litellm_ext.costgov.chargeback import previous_month, to_csv
 from litellm_ext.keyrotation.rotate import classify, clone_spec
 
-NOW = datetime(2026, 7, 19, tzinfo=timezone.utc)
+NOW = datetime(2026, 7, 19, tzinfo=UTC)
 
 
 class TestBudgetEvaluation:
@@ -54,8 +54,8 @@ class TestBudgetEvaluation:
 
 class TestChargeback:
     def test_previous_month_january_wraps(self) -> None:
-        assert previous_month(datetime(2026, 1, 15, tzinfo=timezone.utc)) == "2025-12"
-        assert previous_month(datetime(2026, 7, 19, tzinfo=timezone.utc)) == "2026-06"
+        assert previous_month(datetime(2026, 1, 15, tzinfo=UTC)) == "2025-12"
+        assert previous_month(datetime(2026, 7, 19, tzinfo=UTC)) == "2026-06"
 
     def test_csv_rendering(self) -> None:
         rows = [

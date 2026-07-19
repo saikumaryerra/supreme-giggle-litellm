@@ -47,4 +47,4 @@ class AwsResolver:
     def _resolve_kms(self, ref: str) -> str:
         ciphertext = base64.b64decode(ref.removeprefix("awskms://"))
         response = self._client("kms").decrypt(CiphertextBlob=ciphertext)
-        return response["Plaintext"].decode()
+        return str(response["Plaintext"].decode())
